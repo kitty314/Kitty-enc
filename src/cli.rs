@@ -1,0 +1,289 @@
+use anyhow::{Context, Result};
+use clap::{CommandFactory, Parser, Subcommand};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use zeroize::Zeroize;
+
+use crate::*;
+
+pub const AFTER_HELP: &str = "
+使用示例:
+  kitty_enc                    # 无参数：在当前目录生成密钥并加密当前目录（默认使用密码短语）
+  kitty_enc -s DIR            # 加密指定目录（优先在 DIR 中查找密钥，没有则生成，默认使用密码短语）
+  kitty_enc -k key.kitty_key -s DIR   # 使用指定密钥加密指定目录（默认使用密码短语）
+  kitty_enc encrypt -s DIR    # 显式加密指定目录（优先在 DIR 中查找密钥，没有则生成，默认使用密码短语）
+  kitty_enc -d DIR            # 解密指定目录（在 DIR 中查找密钥文件，默认使用密码短语）
+  kitty_enc -k key.kitty_key -d DIR   # 使用指定密钥解密指定目录（默认使用密码短语）
+  kitty_enc decrypt -d DIR    # 显式解密指定目录（在 DIR 中查找密钥文件，默认使用密码短语）
+  kitty_enc -p                # 纯密码模式：使用密码加密当前目录（不生成密钥文件）
+  kitty_enc -p -s DIR         # 纯密码模式：使用密码加密指定目录（不生成密钥文件）
+  kitty_enc -p -d DIR         # 纯密码模式：使用密码解密指定目录（不生成密钥文件）
+
+注意事项:
+  - 跳过空文件（大小为 0 的文件）
+  - 跳过以 . 开头的目录和文件（如 .git）
+  - 跳过 .kitignore 中规定的文件
+  - 跳过自身可执行文件、密钥文件 (*.kitty_key 和 -k 指定的密钥)、已加密文件 (*.kitty_enc)
+  - 加密后缀：.kitty_enc
+  - 默认密钥文件：目录名-时间.kitty_key（生成于源目录中）
+  - 密钥文件可以修改为任何后缀使用，但不使用默认后缀的密钥无法自动识别
+  - 加密时：
+      * 如果指定了 -k 参数，则使用指定的密钥文件
+      * 如果没有指定 -k 参数，则优先在源目录（-s 指定的目录）中查找现有的密钥文件
+      * 如果找不到现有密钥文件，则创建新的密钥文件（生成在源目录中）
+  - 解密时：
+      * 如果指定了 -k 参数，则使用指定的密钥文件
+      * 如果没有指定 -k 参数，则在解密目录（-d 指定的目录）中查找密钥文件
+  - 密钥查找只搜索一层目录，不递归搜索子文件夹
+  - 加密后删除原始文件，解密后删除加密文件
+  - 所有 .kitty_key 文件都不会被加密，无论是否是指定的密钥文件
+  - 密码短语：
+      * 程序会提示交互式输入密码短语，不会显示在屏幕上，也不会被终端历史记录
+      * 使用密码短语时，密钥文件将存储加密的密钥
+      * 不使用密码短语时，密钥文件存储原始密钥
+      * 使用密码短语时，必须提供正确的密码短语才能解密密钥文件
+      * 密码短语用于增强安全性，即使密钥文件泄露，没有密码短语也无法解密
+  - 纯密码模式 (-p)：
+      * 使用密码直接派生密钥，不生成密钥文件
+      * 加密和解密都需要输入相同的密码
+      * 适用于不需要密钥文件管理的场景
+      * 密码强度直接影响安全性
+
+安全提示:
+  - 请妥善保管密钥文件，丢失密钥将无法解密文件
+  - 建议定期备份密钥文件
+  - 不要在公共网络传输未加密的密钥文件
+  - 使用强密码短语以增强安全性
+  - 密码短语和密钥文件应分开保管
+  - 纯密码模式下，请使用强密码并确保密码安全";
+
+
+#[derive(Parser, Debug)]
+#[command(
+    author,
+    version,
+    name = "kitty_enc",
+    about = "我不是病毒",
+    long_about = "我不是病毒",
+    after_help = AFTER_HELP
+)]
+#[command(propagate_version = true)]
+pub struct Cli {
+    /// 密钥文件路径（可选）
+    #[arg(short = 'k', long = "key", value_name = "KEY_FILE", help = "密钥文件路径（可选）。如果指定，则使用该密钥文件；如果不指定，程序会自动查找或生成密钥文件")]
+    pub key_file: Option<PathBuf>,
+
+    /// 要加密的目录路径
+    #[arg(short = 's', long = "src", value_name = "DIR", help = "要加密的目录路径。加密时会优先在该目录中查找密钥文件")]
+    pub src_dir: Option<PathBuf>,
+
+    /// 要解密的目录路径
+    #[arg(short = 'd', long = "dec", value_name = "DIR", help = "要解密的目录路径。解密时会优先在该目录中查找密钥文件")]
+    pub dec_dir: Option<PathBuf>,
+
+    /// 纯密码模式
+    #[arg(short = 'p', long = "passwd-only", help = "使用纯密码模式，不生成密钥文件")]
+    pub passwd_only: bool,
+
+    /// 要修复的目录路径
+    #[arg(short = 'f', long = "fix", value_name = "DIR", help = "要修复的目录路径。修复时会收集该目录下的所有文件进行比对")]
+    pub fix_dir: Option<PathBuf>,
+
+    /// 操作模式子命令
+    #[command(subcommand, help = "操作模式子命令")]
+    pub mode: Option<Mode>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Mode {
+    /// 加密模式
+    #[command(about = "加密模式", long_about = "加密指定目录或当前目录。加密时会优先在源目录中查找密钥文件，没有则生成新的密钥文件")]
+    Encrypt {
+        /// 要加密的目录路径
+        #[arg(short = 's', long = "src", value_name = "DIR", help = "要加密的目录路径。加密时会优先在该目录中查找密钥文件")]
+        src_dir: Option<PathBuf>,
+        /// 密钥文件路径（可选）
+        #[arg(short = 'k', long = "key", value_name = "KEY_FILE", help = "密钥文件路径（可选）。如果指定，则使用该密钥文件；如果不指定，程序会自动查找或生成密钥文件")]
+        key_file: Option<PathBuf>,
+    },
+    /// 解密模式
+    #[command(about = "解密模式", long_about = "解密指定目录（需要 -d 参数指定目录）。解密时会优先在解密目录中查找密钥文件")]
+    Decrypt {
+        /// 要解密的目录路径
+        #[arg(short = 'd', long = "dec", value_name = "DIR", help = "要解密的目录路径。解密时会优先在该目录中查找密钥文件")]
+        dec_dir: Option<PathBuf>,
+        #[arg(short = 'k', long = "key", value_name = "KEY_FILE", help = "密钥文件路径（可选）。如果指定，则使用该密钥文件；如果不指定，程序会自动查找或生成密钥文件")]
+        key_file: Option<PathBuf>,
+    },
+}
+
+/// 全局中断标志
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+/// 检查是否被中断
+pub fn is_interrupted() -> bool {
+    INTERRUPTED.load(Ordering::SeqCst)
+}
+
+/// 设置 Ctrl+C 信号处理器
+fn set_ctrlc_handler() -> Result<()>{
+    ctrlc::set_handler(move || {
+        INTERRUPTED.store(true, Ordering::SeqCst);
+        println!("\n\nInterrupt signal received. Gracefully stopping after current operations...");
+        println!("If you are entering your password, just press Enter to finish.")
+    }).context("Failed to set Ctrl+C handler")?;
+    Ok(())
+}
+/// 处理命令行参数并执行相应的操作
+pub fn handle_cli(mut cli: Cli) -> Result<()> {
+    // 设置 Ctrl+C 信号处理器
+    set_ctrlc_handler()?;
+    // Paths
+    let exe_path = std::env::current_exe().context("Cannot get current executable path")?;
+    let run_dir = std::env::current_dir().context("Cannot get current working directory")?;
+
+    // 将相对路径转换为绝对路径并规范化
+    normalize_cli_paths(&mut cli, &run_dir);
+
+    // Determine operation mode
+    let result = match (&cli.mode, &cli.src_dir, &cli.dec_dir, &cli.fix_dir, &cli.key_file, &cli.passwd_only) {
+        // No subcommand, no -s/-d: auto encrypt current dir, generate key if none
+        (None, None, None, None, key_opt, false) => {
+            let (key_path,passphrase_opt) = get_or_create_key_path(&run_dir, key_opt, "current")?;
+            let mut key = load_key(&key_path,passphrase_opt)?;
+            let result = process_encrypt_dir(&run_dir, &key, Some(&key_path), &exe_path);
+            key.zeroize();
+            result?;
+            println!("Encryption completed for {}", run_dir.display());
+            Ok(())
+        }
+
+        // Explicit encrypt: -s dir (key optional -> generate in cwd if missing)
+        (Some(Mode::Encrypt { src_dir: Some(src_dir), key_file: key_opt }), None, None, None, None, false) 
+        | (None, Some(src_dir), None, None, key_opt, false) => {
+            let (key_path,passphrase_opt) = get_or_create_key_path(src_dir, key_opt, "source")?;
+            let mut key = load_key(&key_path,passphrase_opt)?;
+            let result = process_encrypt_dir(src_dir, &key, Some(&key_path), &exe_path);
+            key.zeroize();
+            result?;
+            println!("Encryption completed for {}", src_dir.display());
+            Ok(())
+        }
+
+        // Explicit decrypt: -d dir (key optional -> search in decryption directory)
+        (Some(Mode::Decrypt { dec_dir: Some(dec_dir), key_file: key_opt }), None, None, None, None, false) 
+        | (None, None, Some(dec_dir), None, key_opt, false) => {
+            let (key_path,passphrase_opt) = get_or_create_key_path(dec_dir, key_opt, "decryption")?;
+            let mut key = load_key(&key_path,passphrase_opt)?;
+            let result = process_decrypt_dir(dec_dir, &key, &exe_path, Some(&key_path));
+            key.zeroize();
+            result?;
+            println!("Decryption completed for {}", dec_dir.display());
+            Ok(())
+        }
+
+        // Fix mode: -f dir (key optional -> search in fix directory)
+        (None, None, None, Some(fix_dir), key_opt, false) => {
+            let (key_path,passphrase_opt) = get_or_create_key_path(fix_dir, key_opt, "fix")?;
+            let mut key = load_key(&key_path,passphrase_opt)?;
+            let result = process_fix_dir(fix_dir, &key, &exe_path, Some(&key_path));
+            key.zeroize();
+            result?;
+            println!("Fix completed for {}", fix_dir.display());
+            Ok(())
+        }
+
+        // 纯密码模式：加密当前目录
+        (None, None, None, None, None, true) => {
+            let passwd = read_passwd_interactive()?;
+            let mut key = derive_key_from_password(passwd)?;
+            let result = process_encrypt_dir(&run_dir, &key, None, &exe_path);
+            key.zeroize();
+            result?;
+            println!("Encryption completed for {} (password-only mode)", run_dir.display());
+            Ok(())
+        }
+
+        // 纯密码模式：加密指定目录
+        (None, Some(src_dir), None, None, None, true) => {
+            let passwd = read_passwd_interactive()?;
+            let mut key = derive_key_from_password(passwd)?;
+            let result = process_encrypt_dir(src_dir, &key, None, &exe_path);
+            key.zeroize();
+            result?;
+            println!("Encryption completed for {} (password-only mode)", src_dir.display());
+            Ok(())
+        }
+
+        // 纯密码模式：解密指定目录
+        (None, None, Some(dec_dir), None, None, true) => {
+            let passwd = read_passwd_interactive_once()?;
+            let mut key = derive_key_from_password(passwd)?;
+            let result = process_decrypt_dir(dec_dir, &key, &exe_path, None);
+            key.zeroize();
+            result?;
+            println!("Decryption completed for {} (password-only mode)", dec_dir.display());
+            Ok(())
+        }
+
+        // 纯密码模式：修复指定目录
+        (None, None, None, Some(fix_dir), None, true) => {
+            let passwd = read_passwd_interactive_once()?;
+            let mut key = derive_key_from_password(passwd)?;
+            let result = process_fix_dir(fix_dir, &key, &exe_path, None);
+            key.zeroize();
+            result?;
+            println!("Fix completed for {} (password-only mode)", fix_dir.display());
+            Ok(())
+        }
+
+        _ => {
+            print_help();
+            Ok(())
+        }
+    };
+    result
+}
+
+/// 辅助函数：规范化可选路径
+fn normalize_optional_path(path: &mut Option<PathBuf>, run_dir: &PathBuf) {
+    if let Some(path) = path {
+        if path.is_relative() {
+            *path = run_dir.join(&path);
+        }
+        // 规范化路径（移除 . 和 ..）
+        *path = normalize_path(&path);
+    }
+}
+
+/// 规范化 CLI 中的所有路径
+fn normalize_cli_paths(cli: &mut Cli, run_dir: &PathBuf) {
+    // 规范化顶级参数
+    normalize_optional_path(&mut cli.src_dir, run_dir);
+    normalize_optional_path(&mut cli.dec_dir, run_dir);
+    normalize_optional_path(&mut cli.key_file, run_dir);
+    normalize_optional_path(&mut cli.fix_dir, run_dir);
+
+    // 规范化子命令参数
+    match &mut cli.mode {
+        Some(Mode::Encrypt { src_dir, key_file }) => {
+            normalize_optional_path(src_dir, run_dir);
+            normalize_optional_path(key_file, run_dir);
+        }
+        Some(Mode::Decrypt { dec_dir, key_file }) => {
+            normalize_optional_path(dec_dir, run_dir);
+            normalize_optional_path(key_file, run_dir);
+        }
+        None => {}
+    }
+}
+
+/// 打印帮助信息
+pub fn print_help() {
+    // 打印 clap 的默认帮助信息
+    let mut cmd = Cli::command();
+    if let Err(e) = cmd.print_help() {
+        eprintln!("Failed to print help: {}", e);
+    }
+    eprintln!();
+}

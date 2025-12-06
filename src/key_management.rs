@@ -1,0 +1,408 @@
+use anyhow::{anyhow, Context, Result};
+use chacha20poly1305::Key;
+use rand::rngs::OsRng;
+use rand::RngCore;
+use std::fs::{self};
+use std::path::{Path, PathBuf};
+use chrono::Local;
+use zeroize::Zeroize;
+
+use crate::*;
+
+pub fn generate_key_file(path: &Path, passphrase_opt: Option<&str>) -> Result<()> {
+    // 总是生成随机密钥
+    let mut key_bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut key_bytes);
+    
+    let mut key_data = prepare_key_data(&key_bytes, passphrase_opt)?;// 如果失败这一次密钥生成就失败了,应该不需要清理内存
+    
+    // 安全擦除密钥内存
+    key_bytes.zeroize();
+    
+    // 写入密钥文件，如果失败则清理内存
+    if let Err(e) = fs::write(path, &key_data).with_context(|| format!("Failed to write key file: {}", path.display())) {
+        // 安全擦除密钥数据内存 (感觉是冗余的, 根本没有写入成功)
+        key_data.zeroize();
+        return Err(e);
+    }
+    
+    // 写入成功，清理内存
+    key_data.zeroize();
+    Ok(())
+}
+
+/// 准备密钥数据，根据是否使用密码短语进行相应处理
+pub fn prepare_key_data(key_bytes: &[u8; 32], passphrase_opt: Option<&str>) -> Result<Vec<u8>> {
+    match passphrase_opt {
+        Some(passphrase) if !passphrase.is_empty() => {
+            // 使用密码短语加密密钥
+            encrypt_key_with_passphrase(key_bytes, passphrase)
+        }
+        _ => {
+            // 没有密码短语或密码短语为空，直接存储原始密钥
+            Ok(key_bytes.to_vec())
+        }
+    }
+}
+
+pub fn generate_key_filename(dir: &Path) -> String {
+    // 获取目录名
+    let dir_name = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    
+    // 获取当前时间，格式化为 YYYYMMDD_HHMMSS
+    let now = Local::now();
+    let time_str = now.format("%Y%m%d_%H%M%S").to_string();
+    
+    // 清理目录名中的非法字符（只保留字母、数字、下划线、连字符和空格）
+    let clean_dir_name: String = dir_name
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-' || *c == ' ')
+        .collect();
+    
+    // 如果清理后为空，使用默认名称
+    let final_dir_name = if clean_dir_name.is_empty() {
+        "unknown".to_string()
+    } else {
+        clean_dir_name
+    };
+    
+    // 生成文件名：目录名-时间.kitty_key
+    format!("{}-{}.kitty_key", final_dir_name, time_str)
+}
+
+/// 在指定目录中查找现有的密钥文件
+pub fn find_existing_key_file(dir: &Path) -> Option<PathBuf> {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_file() {
+                    if let Some(file_name) = entry.file_name().to_str() {
+                        // 查找以 ".kitty_key" 结尾的文件
+                        if file_name.ends_with(".kitty_key") {
+                            return Some(entry.path());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 获取或创建密钥文件路径（公共函数）
+pub fn get_or_create_key_path(
+    target_dir: &Path,
+    key_opt: &Option<PathBuf>,
+    operation: &str,
+) -> Result<(PathBuf,Option<String>)> {
+    match key_opt {
+        Some(p) => Ok((p.clone(),None)),
+        None => {
+            // 优先在目标目录中查找现有的密钥文件
+            if let Some(existing_key) = find_existing_key_file(target_dir) {
+                println!("Using existing key in {} directory: {}", operation, existing_key.display());
+                Ok((existing_key,None))
+            } else {
+                if operation == "decryption" || operation == "fix" {
+                    return Err(anyhow!("No key file found in {} directory. Please specify key file with -k option.", operation));
+                }
+                // 没有现有密钥文件，生成新的（生成在目标目录中）
+                let key_filename = generate_key_filename(target_dir);
+                let p = target_dir.join(key_filename);
+                let mut passphrase_opt = match read_passphrase_interactive() {
+                    Ok(passphrase) => Some(passphrase),
+                    Err(e) => {
+                        eprintln!("Error reading passphrase: {}", e);
+                        return Err(e);
+                    }
+                };
+                if let Err(e) = generate_key_file(&p, passphrase_opt.as_deref()){
+                    passphrase_opt.zeroize();
+                    return Err(e);
+                }
+                
+                println!("Generated key: {}", p.display());
+                Ok((p, passphrase_opt))
+            }
+        }
+    }
+}
+
+pub fn load_key(path: &Path, passphrase_opt_from_creat: Option<String>) -> Result<Key> {
+    let mut bytes = fs::read(path).with_context(|| format!("Failed to read key file: {}", path.display()))?;
+    
+    // 确定要使用的密码短语
+    let mut passphrase_opt = match passphrase_opt_from_creat {
+        Some(passphrase) => Some(passphrase),
+        None => {
+            match read_passphrase_interactive_once() {
+                Ok(passphrase) => Some(passphrase),
+                Err(e) => {
+                    eprintln!("Error reading passphrase: {}", e);
+                    return Err(e);
+                }
+            }
+        }
+    };
+    
+    // 处理密码短语
+    let result = if let Some(passphrase) = passphrase_opt.as_ref() {
+        if !passphrase.is_empty() {
+            // 尝试用密码短语解密密钥
+            match decrypt_key_with_passphrase(&bytes, passphrase) {
+                Ok(mut decrypted_key) => {
+                    let key = Key::from_slice(&decrypted_key).to_owned();
+                    // 安全擦除解密后的密钥数据
+                    decrypted_key.zeroize();
+                    Ok(key)
+                }
+                Err(_) => {
+                    // 使用通用错误信息，避免泄露密码短语验证失败的具体原因
+                    Err(anyhow!("Failed to load key. Please check your passphrase or key file."))
+                }
+            }
+        } else {
+            // 密码短语为空，直接使用文件中的密钥
+            if bytes.len() != 32 {
+                Err(anyhow!("Invalid key length: expected 32 bytes, got {}", bytes.len()))
+            } else {
+                Ok(Key::from_slice(&bytes).to_owned())
+            }
+        }
+    } else {
+        // 没有密码短语，直接使用文件中的密钥
+        if bytes.len() != 32 {
+            Err(anyhow!("Invalid key length: expected 32 bytes, got {}", bytes.len()))
+        } else {
+            Ok(Key::from_slice(&bytes).to_owned())
+        }
+    };
+    
+    // 安全擦除内存
+    // if let Some(mut passphrase) = passphrase_opt.take() {
+    //     passphrase.zeroize();
+    // }
+    passphrase_opt.zeroize();
+    bytes.zeroize();
+    
+    result
+}
+
+/// 安全地读取密码短语（交互式输入，不显示在屏幕上）
+fn read_passphrase_interactive() -> Result<String> {
+    // 第一次读取密码
+    let mut passphrase = match read_password_utf8("Enter passphrase (input will be hidden)") {
+        Ok(p) => p,
+        Err(e) => {
+            // 读取失败，没有密码需要清理
+            return Err(e);
+        }
+    };
+    
+    // 如果第一次输入为空，给第二次确认机会
+    if passphrase.is_empty() {
+        match read_password_utf8("Empty passphrase entered. Press Enter again to confirm no passphrase, or enter a passphrase") {
+            Ok(second_input) => {
+                // 如果第二次输入非空，则使用第二次输入作为密码短语
+                if !second_input.is_empty() {
+                    // 安全擦除第一次输入的密码（空字符串）
+                    passphrase.zeroize();
+                    passphrase = second_input;
+                }
+                // 如果第二次输入也为空，保持 passphrase 为空
+            }
+            Err(e) => {
+                // 读取第二次输入失败，清理第一次输入的密码
+                passphrase.zeroize();
+                return Err(e);
+            }
+        }
+    }
+    
+    // 如果密码非空，需要确认
+    if !passphrase.is_empty() {
+        // 确认密码短语
+        let mut confirm = match read_password_utf8("Confirm passphrase") {
+            Ok(c) => c,
+            Err(e) => {
+                // 读取确认密码失败，清理主密码
+                passphrase.zeroize();
+                return Err(e);
+            }
+        };
+        
+        if passphrase != confirm {
+            // 密码不匹配，清理两个密码
+            passphrase.zeroize();
+            confirm.zeroize();
+            return Err(anyhow::anyhow!("Passphrases do not match"));
+        }
+        
+        // 密码匹配，清理确认密码
+        confirm.zeroize();
+        
+        // 返回主密码（调用者负责清理）
+        return Ok(passphrase);
+    }
+    
+    // 密码为空，直接返回（空字符串不需要特殊清理）
+    Ok(passphrase)
+}
+
+/// 安全地读取密码（交互式输入，不显示在屏幕上），一直读取直到输入非空
+pub fn read_passwd_interactive() -> Result<String> {
+    loop {
+        // 读取密码
+        let mut passwd = match read_password_utf8("Enter password (input will be hidden)") {
+            Ok(p) => p,
+            Err(e) => {
+                // 读取失败，没有密码需要清理
+                return Err(e);
+            }
+        };
+        
+        // 如果密码为空，提示并重新输入
+        if passwd.is_empty() {
+            println!("Password cannot be empty. Please try again.");
+            passwd.zeroize();
+            continue;
+        }
+        
+        // 确认密码
+        let mut confirm = match read_password_utf8("Confirm password") {
+            Ok(c) => c,
+            Err(e) => {
+                // 读取确认密码失败，清理主密码
+                passwd.zeroize();
+                return Err(e);
+            }
+        };
+        
+        if passwd != confirm {
+            // 密码不匹配，清理两个密码
+            passwd.zeroize();
+            confirm.zeroize();
+            return Err(anyhow::anyhow!("Passphrases do not match"));
+            // println!("Passwords do not match. Please try again.");
+            // continue;
+        }
+        
+        // 密码匹配，清理确认密码
+        confirm.zeroize();
+        
+        // 返回密码（调用者负责清理）
+        return Ok(passwd);
+    }
+}
+
+/// 安全地读取密码一次（交互式输入，不显示在屏幕上）
+pub fn read_passwd_interactive_once() -> Result<String> {
+    loop {
+        let passwd = read_password_utf8("Enter password (input will be hidden)")?;
+        
+        // 如果密码为空，提示并重新输入
+        if passwd.is_empty() {
+            println!("Password cannot be empty. Please try again.");
+            continue;
+        }
+        
+        return Ok(passwd);
+    }
+}
+
+/// 安全地读取密码短语一次（交互式输入，不显示在屏幕上）
+fn read_passphrase_interactive_once() -> Result<String> {
+    let passphrase = read_password_utf8("Enter passphrase (input will be hidden)")?;
+    Ok(passphrase)
+}
+
+/// 读取密码并正确处理 UTF-8 编码（使用 dialoguer 库）
+fn read_password_utf8(prompt:&str) -> Result<String> {
+    let result = dialoguer::Password::new()
+        .with_prompt(prompt)
+        .allow_empty_password(true)
+        .interact()
+        .map_err(|e| anyhow::anyhow!("Failed to read password: {}", e));
+        // 检查中断标志
+    if crate::cli::is_interrupted() {
+        if let Ok(mut passwd) = result {
+            println!("Cleaning up what you've typed...");
+            passwd.zeroize();
+        }
+        println!("Bye");
+        std::process::exit(0);
+    }
+    result
+}
+
+/// 简化的密钥派生函数：从主密钥和salt派生子密钥（32字节）
+/// 使用HMAC-SHA256：subkey = HMAC-SHA256(salt, master_key)
+pub fn derive_subkey_simple(master_key: &[u8; 32], salt: &[u8]) -> Result<[u8; 32]> {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    
+    type HmacSha256 = Hmac<Sha256>;
+    
+    let mut mac = HmacSha256::new_from_slice(salt)
+        .map_err(|e| anyhow!("Failed to create HMAC: {:?}", e))?;
+    
+    mac.update(master_key);
+    
+    let result = mac.finalize().into_bytes();
+    let mut subkey = [0u8; 32];
+    subkey.copy_from_slice(&result);
+    
+    Ok(subkey)
+}
+
+/// 从密码派生密钥（32字节）
+/// 使用Argon2id密钥派生函数，使用密码作为salt (16字节)，如果密码太短则补0
+pub fn derive_key_from_password(mut password: String) -> Result<Key> {
+    use argon2::{self, Argon2};
+    
+    // 使用 Argon2id 派生密钥
+    let params = match argon2::Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, None) {
+        Ok(params) => params,
+        Err(e) => {
+            password.zeroize();
+            return Err(anyhow!("Failed to create Argon2 params: {:?}", e));
+        }
+    };
+    
+    let argon2 = Argon2::new(
+        argon2::Algorithm::Argon2id,
+        argon2::Version::V0x13,
+        params,
+    );
+    
+    // 使用密码作为salt，如果密码太短则补0到16字节
+    let password_bytes = password.as_bytes();
+    let mut salt_bytes = [0u8; SALT_LENGTH];
+    
+    // 复制密码字节到salt数组，如果密码长度小于16则剩余部分保持为0
+    let copy_len = std::cmp::min(password_bytes.len(), SALT_LENGTH);
+    salt_bytes[..copy_len].copy_from_slice(&password_bytes[..copy_len]);
+    
+    // 派生密钥 - 使用 hash_password_into 直接写入可变数组
+    let mut key_bytes = [0u8; 32];
+    if let Err(e) = argon2.hash_password_into(password_bytes, &salt_bytes, &mut key_bytes) {
+        password.zeroize();
+        key_bytes.zeroize();
+        salt_bytes.zeroize();
+        return Err(anyhow!("Failed to derive key from password: {:?}", e));
+    }
+    
+    let key = Key::from_slice(&key_bytes).to_owned();
+    
+    // 安全擦除密码和密钥字节数组
+    password.zeroize();
+    key_bytes.zeroize();
+    salt_bytes.zeroize();
+    
+    Ok(key)
+}
+

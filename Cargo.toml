@@ -1,0 +1,23 @@
+[package]
+name = "kitty_enc"
+version = "0.3.3-fix"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+walkdir = "2"
+rand = "0.8"
+sha2 = "0.10"
+chacha20poly1305 = "0.10.1"
+chrono = "0.4"
+argon2 = "0.5.3"
+zeroize = "1"
+dialoguer = { version = "0.12", features = ["password"] }
+rayon = "1.10"  # 添加 rayon 用于并行处理
+ignore = "0.4.25"
+hmac = "0.12"
+ctrlc = "3.5.1"
+
+[profile.release]
+panic = "abort"
