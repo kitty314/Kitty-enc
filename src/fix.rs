@@ -29,45 +29,47 @@ pub fn process_fix_dir(dir: &Path, master_key: &Key, exe_path: &Path, key_path_o
     
 
     // 对所有重复文件对进行验证和修复
-    let mut processed_count = 0;
+    let mut auto_processed_count = 0;
     let mut deleted_encrypted_count = 0;
     let mut deleted_source_count = 0;
     let mut error_count = 0;
     let mut manual_required_count = 0;
     let mut manual_pairs = Vec::new();
     
-    for (src_path, enc_path) in duplicate_pairs {
+    for (src_path, enc_path) in duplicate_pairs.iter() {
         // 检查中断标志
         if crate::cli::is_interrupted() {
             println!("Interrupt signal received, skipping duplicate pair fix.");
-            return Ok(1);
+            // return Ok(1);
+            break;
         }
 
         println!("Fixing duplicate pair:");
         println!("  Source file: {}", src_path.display());
         println!("  Encrypted file: {}", enc_path.display());
         
-        match verify_and_fix_pair(&src_path, &enc_path, master_key) {
+        match verify_and_fix_pair(src_path, enc_path, master_key) {
             Ok(result) => {
                 match result {
                     FixResult::DeletedEncrypted => {
                         println!("  -> Deleted encrypted file (encrypted file is incomplete)");
                         deleted_encrypted_count += 1;
-                        processed_count += 1;
+                        auto_processed_count += 1;
                     }
                     FixResult::DeletedSource => {
                         println!("  -> Deleted source file (source file is incomplete)");
                         deleted_source_count += 1;
-                        processed_count += 1;
+                        auto_processed_count += 1;
                     }
                     FixResult::Interrupt => {
                         println!("  -> Interrupted, stopping fix operation");
-                        return Ok(1);
+                        // return Ok(1);
+                        break;
                     }
                     FixResult::ManualRequired{reason} => {
                         println!("  -> {reason} Manual intervention required, skipping");
                         manual_required_count += 1;
-                        manual_pairs.push((src_path.clone(), enc_path.clone()));
+                        manual_pairs.push((src_path, enc_path));
                     }
                 }
             }
@@ -79,17 +81,19 @@ pub fn process_fix_dir(dir: &Path, master_key: &Key, exe_path: &Path, key_path_o
     }
     
     println!("Fix summary:");
-    println!("  Successfully processed: {} pairs", processed_count);
-    println!("  Failed: {} pairs", error_count);
-    println!("  Deleted encrypted files: {}", deleted_encrypted_count);
-    println!("  Deleted source files: {}", deleted_source_count);
-    println!("  Manual intervention required: {} pairs", manual_required_count);
+    println!("  Found {} duplicate file pairs", duplicate_pairs.len());
+    println!("  Successfully processed {} pairs", auto_processed_count);
+    println!("  {} pairs failed", error_count);
+    println!("  {} pairs require manual intervention", manual_required_count);
+    println!("  {} pairs not processed", duplicate_pairs.len()-auto_processed_count-error_count-manual_required_count);
+    println!("  Deleted {} encrypted files automatically", deleted_encrypted_count);
+    println!("  Deleted {} source files automatically", deleted_source_count);
 
     // 打印需要手动处理的文件对
     if !manual_pairs.is_empty() {
         println!("\nFiles requiring manual intervention:");
         for (i, (src_path, enc_path)) in manual_pairs.iter().enumerate() {
-            println!("  {}. Source: {}, Encrypted: {}", 
+            println!("  {}.\tSource: {}\n\tEncrypted: {}\n", 
                 i + 1, 
                 src_path.display(), 
                 enc_path.display());

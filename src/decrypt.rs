@@ -253,6 +253,12 @@ pub fn process_decrypt_dir(dir: &Path, master_key: &Key, exe_path: &Path, key_pa
                 println!("Skipping {} due to interrupt signal", path.display());
                 return Ok(1);
             }
+
+            // 先检查目标文件是否存在
+            if check_whether_src_file_exist(path)? {
+                eprintln!("Warning: Target file {} already exists, you need to fix it", path.display());
+                return Ok(3);
+            } 
             
             // 根据文件格式选择解密方式
             let result = match is_streaming_encrypted_file(path) {
@@ -308,6 +314,7 @@ pub fn process_decrypt_dir(dir: &Path, master_key: &Key, exe_path: &Path, key_pa
     }
     
     println!("Decryption summary:");
+    println!("  Found {} encrypted files to decrypt", files_to_process.len());
     println!("  Successfully decrypted: {} files", success_count);
     println!("  Skipped (interrupted): {} files", skipped_interrupt_count);
     println!("  Skipped (file open exception): {} files", skipped_open_exception_count);
@@ -615,4 +622,30 @@ pub fn decrypt_file_streaming(path: &Path, master_key: &Key) -> Result<i32> {
     
     println!("Decrypted (streaming, encrypted file removed, integrity verified): {}", path.display());
     Ok(0)
+}
+
+fn check_whether_src_file_exist(enc_path: &Path) -> Result<bool>{
+    // 获取文件名
+    let file_name = match enc_path.file_name().and_then(|n| n.to_str()) {
+        Some(name) => name,
+        None => {
+            return Err(anyhow!("Cannot get file name for {}", enc_path.display()));
+        }
+    };
+    
+    // 检查是否以 .kitty_enc 结尾
+    if !file_name.ends_with(&format!(".{}", ENC_SUFFIX)) {
+        return Err(anyhow!("Encrypted file does not end with .{}: {}", ENC_SUFFIX, enc_path.display()));
+    }
+    
+    // 删除 .kitty_enc 后缀得到源文件名
+    let out_name = &file_name[..file_name.len() - format!(".{}", ENC_SUFFIX).len()];
+    let parent = enc_path.parent().unwrap_or(Path::new("."));
+    let out_path = parent.join(out_name);
+
+    // 检查解密后的文件是否已经存在，存在则跳过
+    if out_path.exists() {
+        return Ok(true); // 返回代码3表示目标文件已存在而跳过
+    }
+    return Ok(false);
 }

@@ -335,6 +335,7 @@ pub fn process_encrypt_dir(dir: &Path, master_key: &Key, key_path_opt: Option<&P
     }
     
     println!("Encryption summary:");
+    println!("  Found {} files to encrypt", files_to_process.len());
     println!("  Successfully encrypted: {} files", success_count);
     println!("  Skipped (interrupted): {} files", skipped_interrupt_count);
     println!("  Skipped (file open exception): {} files", skipped_open_exception_count);
