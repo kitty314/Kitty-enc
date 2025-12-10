@@ -112,7 +112,21 @@ fn collect_files_for_fix(
 ) -> Result<(Vec<(PathBuf, PathBuf)>, bool)> {
     let mut pairs = Vec::new();
     let mut interrupted = false;
-    
+
+    // 规范化 exe_path
+    let canon_exe_path = fs::canonicalize(exe_path)
+        .with_context(|| format!("Failed to canonicalize exe_path: {}", exe_path.display()))?;
+
+    // 规范化 key_path_opt（如果存在）
+    let canon_key_path_opt= match key_path_opt {
+        Some(kp) => {
+            let canon = fs::canonicalize(kp)
+                .with_context(|| format!("Failed to canonicalize key_path: {}", kp.display()))?;
+            Some(canon)
+        }
+        None => None,
+    };
+
     for entry in WalkBuilder::new(dir)
         .add_custom_ignore_filename(".kitignore")
         .git_ignore(false)
@@ -129,10 +143,12 @@ fn collect_files_for_fix(
         
         let entry = entry?;
         let path = entry.path();
+        let canon_path = fs::canonicalize(path)
+            .with_context(|| format!("Failed to canonicalize path: {}", path.display()))?;
 
         if entry.file_type().unwrap().is_file() {
             // 跳过自身和密钥文件
-            if is_self(path, exe_path) || is_key_file(path, key_path_opt) {
+            if canon_is_self(&canon_path, &canon_exe_path)? || canon_is_key_file(&canon_path, canon_key_path_opt.as_deref())? {
                 continue;
             }
             

@@ -66,33 +66,34 @@ pub fn ignore_filter_entry(e: &ignore_DirEntry) -> bool {
     true
 }
 
-pub fn is_self(path: &Path, exe_path: &Path) -> bool {
-    match fs::canonicalize(path) {
-        Ok(p) => match fs::canonicalize(exe_path) {
-            Ok(e) => p == e,
-            Err(_) => false,
-        },
-        Err(_) => false,
-    }
+pub fn is_self(path: &Path, exe_path: &Path) -> Result<bool> {
+    let p = fs::canonicalize(path)
+        .with_context(|| format!("Failed to canonicalize path: {}", path.display()))?;
+
+    let e = fs::canonicalize(exe_path)
+        .with_context(|| format!("Failed to canonicalize exe_path: {}", exe_path.display()))?;
+
+    Ok(p == e)
 }
 
-pub fn is_key_file(path: &Path, key_path_opt: Option<&Path>) -> bool {
+pub fn is_key_file(path: &Path, key_path_opt: Option<&Path>) -> Result<bool> {
     // 首先检查是否是 .kitty_key 文件
     if let Some(ext) = path.extension() {
         if ext == "kitty_key" {
-            return true;
+            return Ok(true);
         }
     }
-    
-    // 然后检查是否是指定的密钥文件（路径匹配）
-    // 这是为了处理用户可能指定非标准扩展名的密钥文件
+
+    // 然后检查是否是指定的密钥文件（规范化路径匹配）
     if let Some(kp) = key_path_opt {
-        // 尝试直接比较路径
-        if let (Some(p_str), Some(k_str)) = (path.to_str(), kp.to_str()) {
-            return p_str == k_str;
-        }
+        let p = fs::canonicalize(path)
+            .with_context(|| format!("Failed to canonicalize path: {}", path.display()))?;
+        let k = fs::canonicalize(kp)
+            .with_context(|| format!("Failed to canonicalize key_path: {}", kp.display()))?;
+        return Ok(p == k);
     }
-    false
+
+    Ok(false)
 }
 
 pub fn is_encrypted_file(path: &Path) -> bool {
@@ -100,6 +101,26 @@ pub fn is_encrypted_file(path: &Path) -> bool {
     path.file_name()
         .map(|n| n.to_string_lossy())
         .map_or(false, |name| name.ends_with(".kitty_enc"))
+}
+
+pub fn canon_is_self(canon_path: &Path, canon_exe_path: &Path) -> Result<bool> {
+    Ok(canon_path == canon_exe_path)
+}
+
+pub fn canon_is_key_file(canon_path: &Path, canon_key_path_opt: Option<&Path>) -> Result<bool> {
+    // 首先检查是否是 .kitty_key 文件
+    if let Some(ext) = canon_path.extension() {
+        if ext == "kitty_key" {
+            return Ok(true);
+        }
+    }
+
+    // 然后检查是否是指定的密钥文件（规范化路径匹配）
+    if let Some(canon_kp) = canon_key_path_opt {
+        return Ok(canon_kp == canon_path);
+    }
+
+    Ok(false)
 }
 
 /// 验证文件不为空

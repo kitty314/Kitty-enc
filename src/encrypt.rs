@@ -166,7 +166,9 @@ pub fn encrypt_file(path: &Path, master_key: &Key) -> Result<i32> {
     subkey_verify.zeroize();
     pt_verify.zeroize();
 
-    // 只有加密文件验证成功后才删除源文件
+    // 只有加密文件验证成功后才删除源文件 
+    // 2025.12.11 remove_file 是原子操作，不会出现“原文件删一半失败”的情况。
+    // 失败时文件保持完整，成功时整个目录项被移除。
     if let Err(e) = fs::remove_file(path) {
         // 如果删除原文件失败，清理已创建的加密文件
         fs::remove_file(&out_path).ok();
@@ -237,6 +239,20 @@ pub fn process_encrypt_dir(dir: &Path, master_key: &Key, key_path_opt: Option<&P
     let mut files_to_process = Vec::new();
     let mut skipped_empty_count = 0;
     
+    // 规范化 exe_path
+    let canon_exe_path = fs::canonicalize(exe_path)
+        .with_context(|| format!("Failed to canonicalize exe_path: {}", exe_path.display()))?;
+
+    // 规范化 key_path_opt（如果存在）
+    let canon_key_path_opt= match key_path_opt {
+        Some(kp) => {
+            let canon = fs::canonicalize(kp)
+                .with_context(|| format!("Failed to canonicalize key_path: {}", kp.display()))?;
+            Some(canon)
+        }
+        None => None,
+    };
+
     for entry in WalkBuilder::new(dir)
         .add_custom_ignore_filename(".kitignore")
         .git_ignore(false)
@@ -252,10 +268,12 @@ pub fn process_encrypt_dir(dir: &Path, master_key: &Key, key_path_opt: Option<&P
         
         let entry = entry?;
         let path = entry.path();
+        let canon_path = fs::canonicalize(path)
+            .with_context(|| format!("Failed to canonicalize path: {}", path.display()))?;
 
         if entry.file_type().unwrap().is_file() {
-            // Skip conditions
-            if is_self(path, exe_path) || is_key_file(path, key_path_opt) || is_encrypted_file(path) {
+            // Skip conditions 
+            if canon_is_self(&canon_path, &canon_exe_path)? || canon_is_key_file(&canon_path, canon_key_path_opt.as_deref())? || is_encrypted_file(path) {
                 continue;
             }
             let size = entry.metadata()?.len();
@@ -265,7 +283,9 @@ pub fn process_encrypt_dir(dir: &Path, master_key: &Key, key_path_opt: Option<&P
                 skipped_empty_count += 1;
                 continue;
             }
-
+            
+            // 2025.12.11 注意不能输入规范化的path，否则软链接会在实际目录下生成加密文件
+            // 对于软链接，会在处理目录下生成实际文件的加密文件，然后删除链接，不会删除实际文件
             files_to_process.push((path.to_path_buf(), size));
         }
     }

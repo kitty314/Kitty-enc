@@ -209,7 +209,21 @@ pub fn decrypt_key_with_passphrase(encrypted_data: &[u8], passphrase: &str) -> R
 pub fn process_decrypt_dir(dir: &Path, master_key: &Key, exe_path: &Path, key_path_opt: Option<&Path>) -> Result<i32> {
     // 收集所有需要处理的文件
     let mut files_to_process = Vec::new();
-    
+
+    // 规范化 exe_path
+    let canon_exe_path = fs::canonicalize(exe_path)
+        .with_context(|| format!("Failed to canonicalize exe_path: {}", exe_path.display()))?;
+
+    // 规范化 key_path_opt（如果存在）
+    let canon_key_path_opt= match key_path_opt {
+        Some(kp) => {
+            let canon = fs::canonicalize(kp)
+                .with_context(|| format!("Failed to canonicalize key_path: {}", kp.display()))?;
+            Some(canon)
+        }
+        None => None,
+    };
+
     for entry in WalkBuilder::new(dir)
         .add_custom_ignore_filename(".kitignore")
         .git_ignore(false)
@@ -225,10 +239,12 @@ pub fn process_decrypt_dir(dir: &Path, master_key: &Key, exe_path: &Path, key_pa
         
         let entry = entry?;
         let path = entry.path();
+        let canon_path = fs::canonicalize(path)
+            .with_context(|| format!("Failed to canonicalize path: {}", path.display()))?;
 
         if entry.file_type().unwrap().is_file() {
             // Skip self and key file
-            if is_self(path, exe_path) || is_key_file(path, key_path_opt) {
+            if canon_is_self(&canon_path, &canon_exe_path)? || canon_is_key_file(&canon_path, canon_key_path_opt.as_deref())? {
                 continue;
             }
             if is_encrypted_file(path) {
