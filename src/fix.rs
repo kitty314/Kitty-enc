@@ -442,8 +442,8 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &Key) -> Result<i32>
         if block_size == 0 {
             break;
         } else if block_size > (STREAMING_CHUNK_SIZE + 16) as u32 {
-            //密文大小不合理
-            return Ok(99);
+            //密文大小不合理 // 2025.12.17 还是98吧
+            return Ok(98);
         }
         
         let block_size = block_size as usize;

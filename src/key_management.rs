@@ -75,58 +75,88 @@ pub fn generate_key_filename(dir: &Path) -> String {
 }
 
 /// 在指定目录中查找现有的密钥文件
-pub fn find_existing_key_file(dir: &Path) -> Option<PathBuf> {
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            if let Ok(file_type) = entry.file_type() {
-                if file_type.is_file() {
-                    if let Some(file_name) = entry.file_name().to_str() {
-                        // 查找以 ".kitty_key" 结尾的文件
-                        if file_name.ends_with(".kitty_key") {
-                            return Some(entry.path());
-                        }
-                    }
+/// 如果找到多个密钥文件，返回错误要求用户手动指定
+pub fn find_existing_key_file(dir: &Path) -> Result<Option<PathBuf>> {
+    let mut key_files = Vec::new();
+    
+    let entries = fs::read_dir(dir)
+        .with_context(|| format!("Failed to read directory: {}", dir.display()))?;
+    
+    for entry in entries {
+        let entry = entry.with_context(|| format!("Failed to read directory entry in: {}", dir.display()))?;
+        
+        let file_type = entry.file_type()
+            .with_context(|| format!("Failed to get file type for: {}", entry.path().display()))?;
+        
+        if file_type.is_file() {
+            if let Some(file_name) = entry.file_name().to_str() {
+                // 查找以 ".kitty_key" 结尾的文件
+                if file_name.ends_with(".kitty_key") {
+                    key_files.push(entry.path());
                 }
             }
         }
     }
-    None
+    
+    match key_files.len() {
+        0 => Ok(None),
+        1 => Ok(Some(key_files[0].clone())),
+        _ => {
+            // 找到多个密钥文件，列出所有文件并报错
+            eprintln!("Found multiple key files in directory: {}", dir.display());
+            for key_file in &key_files {
+                eprintln!("  - {}", key_file.display());
+            }
+            Err(anyhow!("Multiple key files found. Please specify which key file to use with -k option."))
+        }
+    }
 }
 
 /// 获取或创建密钥文件路径（公共函数）
 pub fn get_or_create_key_path(
-    target_dir: &Path,
+    target_dir_or_file: &Path,
     key_opt: &Option<PathBuf>,
     operation: &str,
 ) -> Result<(PathBuf,Option<String>)> {
     match key_opt {
         Some(p) => Ok((p.clone(),None)),
         None => {
-            // 优先在目标目录中查找现有的密钥文件
-            if let Some(existing_key) = find_existing_key_file(target_dir) {
-                println!("Using existing key in {} directory: {}", operation, existing_key.display());
-                Ok((existing_key,None))
+            // 确定目标目录：如果target_dir_or_file是文件，则取其父目录；否则就是目录本身
+            let target_dir = if target_dir_or_file.is_file() {
+                target_dir_or_file.parent().unwrap_or(Path::new("."))
             } else {
-                if operation == "decryption" || operation == "fix" {
-                    return Err(anyhow!("No key file found in {} directory. Please specify key file with -k option.", operation));
+                target_dir_or_file
+            };
+            
+            // 优先在目标目录中查找现有的密钥文件
+            match find_existing_key_file(target_dir) {
+                Ok(Some(existing_key)) => {
+                    println!("Using existing key in {} directory: {}", operation, existing_key.display());
+                    Ok((existing_key,None))
                 }
-                // 没有现有密钥文件，生成新的（生成在目标目录中）
-                let key_filename = generate_key_filename(target_dir);
-                let p = target_dir.join(key_filename);
-                let mut passphrase_opt = match read_passphrase_interactive() {
-                    Ok(passphrase) => Some(passphrase),
-                    Err(e) => {
-                        eprintln!("Error reading passphrase: {}", e);
+                Ok(None) => {
+                    if operation == "decryption" || operation == "fix" {
+                        return Err(anyhow!("No key file found in {} directory. Please specify key file with -k option.", operation));
+                    }
+                    // 没有现有密钥文件，生成新的（生成在目标目录中）
+                    let key_filename = generate_key_filename(target_dir);
+                    let p = target_dir.join(key_filename);
+                    let mut passphrase_opt = match read_passphrase_interactive() {
+                        Ok(passphrase) => Some(passphrase),
+                        Err(e) => {
+                            eprintln!("Error reading passphrase: {}", e);
+                            return Err(e);
+                        }
+                    };
+                    if let Err(e) = generate_key_file(&p, passphrase_opt.as_deref()){
+                        passphrase_opt.zeroize();
                         return Err(e);
                     }
-                };
-                if let Err(e) = generate_key_file(&p, passphrase_opt.as_deref()){
-                    passphrase_opt.zeroize();
-                    return Err(e);
+                    
+                    println!("Generated key: {}", p.display());
+                    Ok((p, passphrase_opt))
                 }
-                
-                println!("Generated key: {}", p.display());
-                Ok((p, passphrase_opt))
+                Err(e) => Err(e), // 处理 find_existing_key_file 返回的错误
             }
         }
     }
