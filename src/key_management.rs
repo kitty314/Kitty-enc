@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use chacha20poly1305::Key;
 use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::TryRngCore;
 use std::fs::{self};
 use std::path::{Path, PathBuf};
 use chrono::Local;
@@ -12,7 +12,9 @@ use crate::*;
 pub fn generate_key_file(path: &Path, passphrase_opt: Option<&str>) -> Result<()> {
     // 总是生成随机密钥
     let mut key_bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut key_bytes);
+    if let Err(e) = OsRng.try_fill_bytes(&mut key_bytes) {
+        return Err(e).context("Failed to generate random key");
+    }
     
     let mut key_data = prepare_key_data(&key_bytes, passphrase_opt)?;// 如果失败这一次密钥生成就失败了,应该不需要清理内存
     

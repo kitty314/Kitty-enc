@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::TryRngCore;
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -59,7 +59,11 @@ pub fn encrypt_file(path: &Path, master_key: &Key) -> Result<i32> {
 
     // Random XNonce per file (24 bytes)
     let mut xnonce_bytes = [0u8; 24];
-    OsRng.fill_bytes(&mut xnonce_bytes);
+    if let Err(e) = OsRng.try_fill_bytes(&mut xnonce_bytes) {
+        // 安全擦除文件数据（虽然不是密钥材料，但出于安全考虑）
+        data.zeroize();
+        return Err(e).context("Failed to generate random nonce for file encryption");
+    }
     let xnonce = XNonce::from_slice(&xnonce_bytes);
     
     // 使用主密钥和nonce作为盐派生子密钥
@@ -183,7 +187,9 @@ pub fn encrypt_file(path: &Path, master_key: &Key) -> Result<i32> {
 pub fn encrypt_key_with_passphrase(key: &[u8; 32], passphrase: &str) -> Result<Vec<u8>> {
     // 生成随机 salt
     let mut salt_bytes = [0u8; SALT_LENGTH];
-    OsRng.fill_bytes(&mut salt_bytes);
+    if let Err(e) = OsRng.try_fill_bytes(&mut salt_bytes) {
+        return Err(e).context("Failed to generate random salt for key encryption");
+    }
     
     // 使用 Argon2id 派生密钥加密密钥
     let argon2 = Argon2::new(
@@ -204,7 +210,12 @@ pub fn encrypt_key_with_passphrase(key: &[u8; 32], passphrase: &str) -> Result<V
     
     // 随机 xnonce
     let mut xnonce_bytes = [0u8; 24];
-    OsRng.fill_bytes(&mut xnonce_bytes);
+    if let Err(e) = OsRng.try_fill_bytes(&mut xnonce_bytes) {
+        // 安全擦除敏感数据
+        salt_bytes.zeroize();
+        key_encryption_key_bytes.zeroize();
+        return Err(e).context("Failed to generate random nonce");
+    }
     let xnonce = XNonce::from_slice(&xnonce_bytes);
     
     // 加密密钥
@@ -286,7 +297,7 @@ pub fn process_encrypt_dir(dir: &Path, master_key: &Key, key_path_opt: Option<&P
             }
             
             // 2025.12.11 注意不能输入规范化的path，否则软链接会在实际目录下生成加密文件
-            // 对于软链接，is_file()会返回false，直接跳过
+            // 对于软链接，is_file()会返回false，直接跳过，除非WalkBuilder指定输入为软链接
             files_to_process.push((path.to_path_buf(), size));
         }
     }
@@ -417,7 +428,11 @@ pub fn encrypt_file_streaming(path: &Path, master_key: &Key) -> Result<i32> {
     
     // 生成 24 字节的扩展 nonce
     let mut xnonce_bytes = [0u8; 24];
-    OsRng.fill_bytes(&mut xnonce_bytes);
+    if let Err(e) = OsRng.try_fill_bytes(&mut xnonce_bytes) {
+        // 清理已创建的加密文件
+        fs::remove_file(&out_path).ok();
+        return Err(e).context("Failed to generate random nonce for streaming encryption");
+    }
     
     // 使用主密钥和nonce作为盐派生子密钥
     let mut subkey = derive_subkey_simple(master_key.as_slice().try_into().unwrap(), &xnonce_bytes)?;
