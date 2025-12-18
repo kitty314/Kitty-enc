@@ -239,10 +239,11 @@ pub fn process_decrypt_dir(dir: &Path, master_key: &Key, exe_path: &Path, key_pa
         
         let entry = entry?;
         let path = entry.path();
-        let canon_path = fs::canonicalize(path)
-            .with_context(|| format!("Failed to canonicalize path: {}", path.display()))?;
 
         if entry.file_type().unwrap().is_file() {
+            // 先判断是文件再规范化
+            let canon_path = fs::canonicalize(path)
+                .with_context(|| format!("Failed to canonicalize path: {}", path.display()))?;
             // Skip self and key file
             if canon_is_self(&canon_path, &canon_exe_path)? || canon_is_key_file(&canon_path, canon_key_path_opt.as_deref())? {
                 continue;

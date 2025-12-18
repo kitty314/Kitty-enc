@@ -268,10 +268,11 @@ pub fn process_encrypt_dir(dir: &Path, master_key: &Key, key_path_opt: Option<&P
         
         let entry = entry?;
         let path = entry.path();
-        let canon_path = fs::canonicalize(path)
-            .with_context(|| format!("Failed to canonicalize path: {}", path.display()))?;
 
         if entry.file_type().unwrap().is_file() {
+            // 先判断是文件再规范化
+            let canon_path = fs::canonicalize(path)
+                .with_context(|| format!("Failed to canonicalize path: {}", path.display()))?;
             // Skip conditions 
             if canon_is_self(&canon_path, &canon_exe_path)? || canon_is_key_file(&canon_path, canon_key_path_opt.as_deref())? || is_encrypted_file(path) {
                 continue;
@@ -285,7 +286,7 @@ pub fn process_encrypt_dir(dir: &Path, master_key: &Key, key_path_opt: Option<&P
             }
             
             // 2025.12.11 注意不能输入规范化的path，否则软链接会在实际目录下生成加密文件
-            // 对于软链接，会在处理目录下生成实际文件的加密文件，然后删除链接，不会删除实际文件
+            // 对于软链接，is_file()会返回false，直接跳过
             files_to_process.push((path.to_path_buf(), size));
         }
     }

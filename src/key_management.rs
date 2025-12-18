@@ -464,11 +464,11 @@ pub fn derive_key_from_any_file(
 ) -> Result<Key> {
     use argon2::{self, Argon2};
     
-    // 1. 检查文件是否存在且大小至少32字节
+    // 1. 检查文件是否存在且大小至少32字节 //2025.12.18冗余
     if !file_path.exists() {
         return Err(anyhow!("File does not exist: {}", file_path.display()));
     }
-    
+    // 2025.12.18 Path.is_file()会追溯软链接，如果链接破损或无权限返回false
     if !file_path.is_file() {
         return Err(anyhow!("Path is not a file: {}", file_path.display()));
     }
