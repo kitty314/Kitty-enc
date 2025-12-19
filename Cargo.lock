@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "kitty_enc"
-version = "0.3.8-test"
+version = "0.3.8-test-fix-1"
 dependencies = [
  "anyhow",
  "argon2",

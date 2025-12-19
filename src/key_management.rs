@@ -417,9 +417,9 @@ pub fn derive_key_from_password(mut password: String) -> Result<Key> {
     // 使用 Argon2id 派生密钥
     let params = match argon2::Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, None) {
         Ok(params) => params,
-        Err(e) => {
+        Err(_e) => {
             password.zeroize();
-            return Err(anyhow!("Failed to create Argon2 params: {:?}", e));
+            return Err(anyhow!("Failed to create Argon2 parameters for deriving key from password"));
         }
     };
     
@@ -439,11 +439,11 @@ pub fn derive_key_from_password(mut password: String) -> Result<Key> {
     
     // 派生密钥 - 使用 hash_password_into 直接写入可变数组
     let mut key_bytes = [0u8; 32];
-    if let Err(e) = argon2.hash_password_into(password_bytes, &salt_bytes, &mut key_bytes) {
+    if let Err(_e) = argon2.hash_password_into(password_bytes, &salt_bytes, &mut key_bytes) {
         password.zeroize();
         key_bytes.zeroize();
         salt_bytes.zeroize();
-        return Err(anyhow!("Failed to derive key from password: {:?}", e));
+        return Err(anyhow!("Failed to derive key from password"));
     }
     
     let key = Key::from_slice(&key_bytes).to_owned();
@@ -475,7 +475,7 @@ pub fn derive_key_from_any_file(
 ) -> Result<Key> {
     use argon2::{self, Argon2};
     
-    // 1. 检查文件是否存在且大小至少32字节 //2025.12.18冗余
+    // 检查文件是否存在且大小至少32字节 //2025.12.18会追溯软链接，如果链接破损或无权限返回false
     if !file_path.exists() {
         return Err(anyhow!("File does not exist: {}", file_path.display()));
     }
@@ -490,21 +490,22 @@ pub fn derive_key_from_any_file(
     if metadata.len() < 32 {
         return Err(anyhow!("File must be at least 32 bytes, but is only {} bytes", metadata.len()));
     }
+
+    // 配置Argon2
+    let params = match argon2::Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, None) {
+        Ok(params) => params,
+        Err(_e) => {
+            return Err(anyhow!("Failed to create Argon2 params for deriving key from any file"));
+        }
+    };
     
-    // 2. 读取文件至多前1MB内容
-    let mut file = fs::File::open(file_path)
-        .with_context(|| format!("Failed to open file: {}", file_path.display()))?;
-    
-    // 限制读取大小为1MB
-    let max_read_size = 1024 * 1024; // 1MB
-    let read_size = std::cmp::min(metadata.len(), max_read_size as u64) as usize;
-    
-    let mut file_data = vec![0u8; read_size];
-    use std::io::Read;
-    file.read_exact(&mut file_data)
-        .with_context(|| format!("Failed to read file data: {}", file_path.display()))?;
-    
-    // 3. 处理密码和盐
+    let argon2 = Argon2::new(
+        argon2::Algorithm::Argon2id,
+        argon2::Version::V0x13,
+        params,
+    );
+
+    // 获取密码
     let mut password = if use_password {
         if need_confirm {
             read_passwd_interactive()?
@@ -514,56 +515,57 @@ pub fn derive_key_from_any_file(
     } else {
         String::new()
     };
+
+    // 读取文件至多前1MB内容
+    let mut file = match fs::File::open(file_path) {
+        Ok(f) => f,
+        Err(e) => {
+            password.zeroize();
+            return Err(e).with_context(|| format!("Failed to open file: {}", file_path.display()));
+        }
+    };
     
-    // 准备盐：如果不使用密码，使用文件前16字节作为盐；如果使用密码，使用密码作为盐
+    // 限制读取大小为1MB
+    let read_size = std::cmp::min(metadata.len(), ANY_FILE_MAX_READ_SIZE as u64) as usize;
+    
+    let mut file_data = vec![0u8; read_size];
+    use std::io::Read;
+    if let Err(e) = file.read_exact(&mut file_data) {
+        password.zeroize();
+        file_data.zeroize();
+        return Err(e).with_context(|| format!("Failed to read file data: {}", file_path.display()));
+    }
+    
+    
+    // 准备盐：如果不使用密码，使用文件前16字节作为盐；如果使用密码，使用密码派生密钥作为盐
     let mut salt: Vec<u8>;
     
     if use_password {
-        // 使用密码作为盐，如果密码太短则补0到16字节，如果超出16字节，使用全长
-        let password_bytes = password.as_bytes();
-        if password_bytes.len() <= SALT_LENGTH {
-            // 密码长度不足16字节，补0
-            let mut salt_bytes = [0u8; SALT_LENGTH];
-            let copy_len = password_bytes.len();
-            salt_bytes[..copy_len].copy_from_slice(&password_bytes[..copy_len]);
-            salt = salt_bytes.to_vec();
-            // 安全擦除盐字节数组
-            salt_bytes.zeroize();
-        } else {
-            // 密码长度超过16字节，使用全长
-            salt = password_bytes.to_vec();
+        // 使用密码派生密钥作为盐
+        let mut salt_from_passwd = [0u8;32];
+        if let Err(_e) = argon2.hash_password_into(password.as_bytes(), &file_data, &mut salt_from_passwd) {
+            password.zeroize();
+            file_data.zeroize();
+            salt_from_passwd.zeroize();
+            return Err(anyhow!("Failed to derive salt from password"));
         }
+        salt = salt_from_passwd.to_vec();
+        salt_from_passwd.zeroize();
     } else {
         // 使用文件前16字节作为盐
         let copy_len = std::cmp::min(file_data.len(), SALT_LENGTH);
         salt = file_data[..copy_len].to_vec();
     }
     
-    // 4. 使用 Argon2id 派生密钥
-    let params = match argon2::Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, None) {
-        Ok(params) => params,
-        Err(e) => {
-            password.zeroize();
-            file_data.zeroize();
-            salt.zeroize();
-            return Err(anyhow!("Failed to create Argon2 params: {:?}", e));
-        }
-    };
-    
-    let argon2 = Argon2::new(
-        argon2::Algorithm::Argon2id,
-        argon2::Version::V0x13,
-        params,
-    );
     
     // 派生密钥 - 使用 hash_password_into 直接写入可变数组
     let mut key_bytes = [0u8; 32];
-    if let Err(e) = argon2.hash_password_into(&file_data, &salt, &mut key_bytes) {
+    if let Err(_e) = argon2.hash_password_into(&file_data, &salt, &mut key_bytes) {
         password.zeroize();
         file_data.zeroize();
         key_bytes.zeroize();
         salt.zeroize();
-        return Err(anyhow!("Failed to derive key from file: {:?}", e));
+        return Err(anyhow!("Failed to derive key from any file"));
     }
     
     let key = Key::from_slice(&key_bytes).to_owned();
