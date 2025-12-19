@@ -294,6 +294,12 @@ fn read_passphrase_interactive() -> Result<String> {
     Ok(passphrase)
 }
 
+/// 安全地读取密码短语一次（交互式输入，不显示在屏幕上）
+fn read_passphrase_interactive_once() -> Result<String> {
+    let passphrase = read_password_utf8("Enter passphrase (input will be hidden)")?;
+    Ok(passphrase)
+}
+
 /// 安全地读取密码（交互式输入，不显示在屏幕上），一直读取直到输入非空
 pub fn read_passwd_interactive() -> Result<String> {
     loop {
@@ -355,12 +361,6 @@ pub fn read_passwd_interactive_once() -> Result<String> {
     }
 }
 
-/// 安全地读取密码短语一次（交互式输入，不显示在屏幕上）
-fn read_passphrase_interactive_once() -> Result<String> {
-    let passphrase = read_password_utf8("Enter passphrase (input will be hidden)")?;
-    Ok(passphrase)
-}
-
 /// 读取密码并正确处理 UTF-8 编码（使用 dialoguer 库）
 fn read_password_utf8(prompt:&str) -> Result<String> {
     let result = dialoguer::Password::new()
@@ -381,21 +381,30 @@ fn read_password_utf8(prompt:&str) -> Result<String> {
 }
 
 /// 简化的密钥派生函数：从主密钥和salt派生子密钥（32字节）
-/// 使用HMAC-SHA256：subkey = HMAC-SHA256(salt, master_key)
+/// 使用Argon2id：subkey = Argon2id(master_key, salt)
 pub fn derive_subkey_simple(master_key: &[u8; 32], salt: &[u8]) -> Result<[u8; 32]> {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
+    use argon2::{self, Argon2};
     
-    type HmacSha256 = Hmac<Sha256>;
+    // 使用 Argon2id 派生密钥
+    let params = match argon2::Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, None) {
+        Ok(params) => params,
+        Err(_) => {
+            return Err(anyhow!("Failed to create Argon2 parameters during subkey derivation"));
+        }
+    };
     
-    let mut mac = HmacSha256::new_from_slice(salt)
-        .map_err(|e| anyhow!("Failed to create HMAC: {:?}", e))?;
+    let argon2 = Argon2::new(
+        argon2::Algorithm::Argon2id,
+        argon2::Version::V0x13,
+        params,
+    );
     
-    mac.update(master_key);
-    
-    let result = mac.finalize().into_bytes();
+    // 派生密钥 - 使用 hash_password_into 直接写入可变数组
     let mut subkey = [0u8; 32];
-    subkey.copy_from_slice(&result);
+    if let Err(_) = argon2.hash_password_into(master_key, salt, &mut subkey) {
+        subkey.zeroize();
+        return Err(anyhow!("Failed to derive subkey"));
+    }
     
     Ok(subkey)
 }

@@ -21,4 +21,4 @@ pub const ENC_SUFFIX: &str = "kitty_enc";
 pub const SALT_LENGTH: usize = 16;
 pub const ARGON2_M_COST: u32 = 16384; // 16MB - 减小内存消耗
 pub const ARGON2_T_COST: u32 = 5;      // 增加时间成本提高安全性
-pub const ARGON2_P_COST: u32 = 2;      // 减小并行度以降低内存压力
+pub const ARGON2_P_COST: u32 = 2;      // 并行度

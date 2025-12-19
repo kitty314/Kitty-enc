@@ -196,14 +196,14 @@ pub fn encrypt_key_with_passphrase(key: &[u8; 32], passphrase: &str) -> Result<V
         argon2::Algorithm::Argon2id,
         argon2::Version::V0x13,
         argon2::Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, None)
-            .map_err(|e| anyhow!("Failed to create Argon2 params: {:?}", e))?,
+            .map_err(|_e| anyhow!("Failed to create Argon2 params for key encryption"))?,
     );
     
     // 派生密钥 - 使用 hash_password_into 直接写入可变数组
     let mut key_encryption_key_bytes = [0u8; 32];
     argon2
         .hash_password_into(passphrase.as_bytes(), &salt_bytes, &mut key_encryption_key_bytes)
-        .map_err(|e| anyhow!("Failed to derive key: {:?}", e))?;
+        .map_err(|_e| anyhow!("Failed to derive key for key encryption"))?;
     
     // 使用 XChaCha20Poly1305 加密密钥
     let cipher = XChaCha20Poly1305::new(Key::from_slice(&key_encryption_key_bytes));
@@ -214,7 +214,7 @@ pub fn encrypt_key_with_passphrase(key: &[u8; 32], passphrase: &str) -> Result<V
         // 安全擦除敏感数据
         salt_bytes.zeroize();
         key_encryption_key_bytes.zeroize();
-        return Err(e).context("Failed to generate random nonce");
+        return Err(e).context("Failed to generate random nonce for key encryption");
     }
     let xnonce = XNonce::from_slice(&xnonce_bytes);
     
