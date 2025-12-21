@@ -19,6 +19,7 @@ pub const STREAMING_THRESHOLD: u64 = 10 * 1024 * 1024; // 10MB，超过这个大
 pub const STREAMING_CHUNK_SIZE: usize = 1024 * 1024; // 1MB 流式分块大小
 pub const ANY_FILE_MAX_READ_SIZE: usize = 1024 * 1024; // 任意文件加密时读取文件至多前1MB内容作为输入数据
 pub const ENC_SUFFIX: &str = "kitty_enc";
+pub const DEFAULT_KEY_SUFFIX: &str = "kitty_key";
 pub const SALT_LENGTH: usize = 16;
 pub const ARGON2_M_COST: u32 = 16384; // 16MB - 减小内存消耗
 pub const ARGON2_T_COST: u32 = 5;      // 增加时间成本提高安全性

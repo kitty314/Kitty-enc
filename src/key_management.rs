@@ -73,7 +73,7 @@ pub fn generate_key_filename(dir: &Path) -> String {
     };
     
     // 生成文件名：目录名-时间.kitty_key
-    format!("{}-{}.kitty_key", final_dir_name, time_str)
+    format!("{}-{}.{}", final_dir_name, time_str, DEFAULT_KEY_SUFFIX)
 }
 
 /// 在指定目录中查找现有的密钥文件
@@ -93,7 +93,7 @@ pub fn find_existing_key_file(dir: &Path) -> Result<Option<PathBuf>> {
         if file_type.is_file() {
             if let Some(file_name) = entry.file_name().to_str() {
                 // 查找以 ".kitty_key" 结尾的文件
-                if file_name.ends_with(".kitty_key") {
+                if file_name.ends_with(&format!(".{}", DEFAULT_KEY_SUFFIX)) {
                     key_files.push(entry.path());
                 }
             }

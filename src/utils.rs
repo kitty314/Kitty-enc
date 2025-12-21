@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use walkdir::DirEntry;
 use ignore::DirEntry as ignore_DirEntry;
 
+use crate::*;
+
 /// 规范化路径，移除 . 和 .. 组件
 pub fn normalize_path(path: &Path) -> PathBuf {
     // 使用更简洁的方式规范化路径
@@ -79,7 +81,7 @@ pub fn is_self(path: &Path, exe_path: &Path) -> Result<bool> {
 pub fn is_key_file(path: &Path, key_path_opt: Option<&Path>) -> Result<bool> {
     // 首先检查是否是 .kitty_key 文件
     if let Some(ext) = path.extension() {
-        if ext == "kitty_key" {
+        if ext == DEFAULT_KEY_SUFFIX {
             return Ok(true);
         }
     }
@@ -100,7 +102,7 @@ pub fn is_encrypted_file(path: &Path) -> bool {
     // 使用 to_string_lossy() 处理所有可能的文件名
     path.file_name()
         .map(|n| n.to_string_lossy())
-        .map_or(false, |name| name.ends_with(".kitty_enc"))
+        .map_or(false, |name| name.ends_with(&format!(".{}", ENC_SUFFIX)))
 }
 
 pub fn canon_is_self(canon_path: &Path, canon_exe_path: &Path) -> Result<bool> {
@@ -110,7 +112,7 @@ pub fn canon_is_self(canon_path: &Path, canon_exe_path: &Path) -> Result<bool> {
 pub fn canon_is_key_file(canon_path: &Path, canon_key_path_opt: Option<&Path>) -> Result<bool> {
     // 首先检查是否是 .kitty_key 文件
     if let Some(ext) = canon_path.extension() {
-        if ext == "kitty_key" {
+        if ext == DEFAULT_KEY_SUFFIX {
             return Ok(true);
         }
     }
