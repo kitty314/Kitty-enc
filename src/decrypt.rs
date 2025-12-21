@@ -161,14 +161,14 @@ pub fn decrypt_key_with_passphrase(encrypted_data: &[u8], passphrase: &str) -> R
         argon2::Algorithm::Argon2id,
         argon2::Version::V0x13,
         argon2::Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, None)
-            .map_err(|e| anyhow!("Failed to create Argon2 params: {:?}", e))?,
+            .map_err(|_e| anyhow!("Failed to create Argon2 params for key decryption"))?,
     );
     
     // 派生密钥 - 使用 hash_password_into 直接写入可变数组
     let mut key_encryption_key_bytes = [0u8; 32];
     argon2
         .hash_password_into(passphrase.as_bytes(), salt_bytes, &mut key_encryption_key_bytes)
-        .map_err(|e| anyhow!("Failed to derive key: {:?}", e))?;
+        .map_err(|_e| anyhow!("Failed to derive key for key decryption"))?;
     
     // 使用 XChaCha20Poly1305 解密密钥
     let cipher = XChaCha20Poly1305::new(Key::from_slice(&key_encryption_key_bytes));
@@ -268,10 +268,17 @@ pub fn process_decrypt_dir(dir: &Path, master_key: &Key, exe_path: &Path, key_pa
             }
 
             // 先检查目标文件是否存在
-            if check_whether_src_file_exist(path)? {
-                eprintln!("Warning: Target file {} already exists, you need to fix it", path.display());
-                return Ok(3);
-            } 
+            match check_whether_src_file_exist(path) {
+                Ok((true,out_path)) => {
+                    eprintln!("Warning: Target file {} already exists, you need to fix it", out_path.display());
+                    return Ok(3);
+                } 
+                Ok((false,_)) => {}
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    return Err(e);
+                }
+            }
             
             // 根据文件格式选择解密方式
             let result = match is_streaming_encrypted_file(path) {
@@ -633,7 +640,7 @@ pub fn decrypt_file_streaming(path: &Path, master_key: &Key) -> Result<i32> {
     Ok(0)
 }
 
-fn check_whether_src_file_exist(enc_path: &Path) -> Result<bool>{
+fn check_whether_src_file_exist(enc_path: &Path) -> Result<(bool,PathBuf)>{
     // 检查是否以 .kitty_enc 结尾
     if let Some(orig_ext) = enc_path.extension() {
         if orig_ext == ENC_SUFFIX{
@@ -650,7 +657,7 @@ fn check_whether_src_file_exist(enc_path: &Path) -> Result<bool>{
 
     // 检查解密后的文件是否已经存在，存在则跳过
     if out_path.exists() {
-        return Ok(true); // 返回代码3表示目标文件已存在而跳过
+        return Ok((true,out_path)); // 返回代码3表示目标文件已存在而跳过
     }
-    return Ok(false);
+    return Ok((false,out_path));
 }
