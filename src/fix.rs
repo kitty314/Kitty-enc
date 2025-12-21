@@ -162,23 +162,19 @@ fn collect_files_for_fix(
             
             // 只处理加密文件
             if is_encrypted_file(path) {
-                // 获取文件名
-                let file_name = match path.file_name() {
-                    Some(name) => name.to_string_lossy().to_string(),
-                    None => {
-                        return Err(anyhow!("Cannot get file name for {}", path.display()));
-                    }
-                };
-                
                 // 检查是否以 .kitty_enc 结尾
-                if !file_name.ends_with(&format!(".{}", ENC_SUFFIX)) {
-                    return Err(anyhow!("Encrypted file does not end with .{}: {}", ENC_SUFFIX, path.display()));
-                }
-                
-                // 删除 .kitty_enc 后缀得到源文件名
-                let src_file_name = &file_name[..file_name.len() - format!(".{}", ENC_SUFFIX).len()];
-                let parent = path.parent().unwrap_or(Path::new("."));
-                let src_path = parent.join(src_file_name);
+                if let Some(orig_ext) = path.extension() {
+                    if orig_ext == ENC_SUFFIX{
+                        // pass
+                    } else {
+                        return Err(anyhow!("Encrypted file does not end with .{}: {}", ENC_SUFFIX, path.display()));
+                    }
+                } else {
+                        return Err(anyhow!("Cannot get file extension: {}", path.display()));
+                };
+
+                let mut src_path = PathBuf::from(path);
+                src_path.set_extension("");
                 
                 // 检查源文件是否已经存在
                 if src_path.exists() {

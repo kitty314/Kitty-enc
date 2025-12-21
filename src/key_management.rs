@@ -51,7 +51,7 @@ pub fn generate_key_filename(dir: &Path) -> String {
     // 获取目录名
     let dir_name = dir
         .file_name()
-        .and_then(|n| n.to_str())
+        .and_then(|n| Some(n.to_string_lossy()))
         .map(|s| s.to_string())
         .unwrap_or_else(|| "unknown".to_string());
     
@@ -91,9 +91,9 @@ pub fn find_existing_key_file(dir: &Path) -> Result<Option<PathBuf>> {
             .with_context(|| format!("Failed to get file type for: {}", entry.path().display()))?;
         
         if file_type.is_file() {
-            if let Some(file_name) = entry.file_name().to_str() {
+            if let Some(file_ext) = entry.path().extension() {
                 // 查找以 ".kitty_key" 结尾的文件
-                if file_name.ends_with(&format!(".{}", DEFAULT_KEY_SUFFIX)) {
+                if file_ext == DEFAULT_KEY_SUFFIX {
                     key_files.push(entry.path());
                 }
             }

@@ -4,7 +4,7 @@ use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 // use walkdir::WalkDir;
 use std::fs::{self, File};
 use std::io::Read;
-use std::path::{Path};
+use std::path::{Path, PathBuf};
 use sha2::{Sha256, Digest};
 use argon2::{self, Argon2};
 use zeroize::Zeroize;
@@ -26,25 +26,21 @@ pub fn decrypt_file(path: &Path, master_key: &Key) -> Result<i32> {
         eprintln!("Warning: Encrypted file {} cannot be opened (file open exception).", path.display());
         return Ok(2); // 返回特殊代码表示文件打开异常
     }
-
-    // 获取文件名
-    let file_name = match path.file_name().and_then(|n| n.to_str()) {
-        Some(name) => name,
-        None => {
-            return Err(anyhow!("Cannot get file name for {}", path.display()));
-        }
-    };
     
     // 检查是否以 .kitty_enc 结尾
-    if !file_name.ends_with(&format!(".{}", ENC_SUFFIX)) {
-        return Err(anyhow!("Encrypted file does not end with .{}: {}", ENC_SUFFIX, path.display()));
-    }
-    
-    // 删除 .kitty_enc 后缀得到源文件名
-    let out_name = &file_name[..file_name.len() - format!(".{}", ENC_SUFFIX).len()];
-    let parent = path.parent().unwrap_or(Path::new("."));
-    let out_path = parent.join(out_name);
+    if let Some(orig_ext) = path.extension() {
+        if orig_ext == ENC_SUFFIX{
+            // pass
+        } else {
+            return Err(anyhow!("Encrypted file does not end with .{}: {}", ENC_SUFFIX, path.display()));
+        }
+    } else {
+            return Err(anyhow!("Cannot get file extension: {}", path.display()));
+    };
 
+    let mut out_path = PathBuf::from(path);
+    out_path.set_extension("");
+    
     // 检查解密后的文件是否已经存在，存在则跳过
     if out_path.exists() {
         eprintln!("Warning: Target file {} already exists, you need to fix it", out_path.display());
@@ -363,24 +359,20 @@ pub fn decrypt_file_streaming(path: &Path, master_key: &Key) -> Result<i32> {
         return Ok(2); // 返回特殊代码表示文件打开异常
     }
 
-    // 获取文件名
-    let file_name = match path.file_name().and_then(|n| n.to_str()) {
-        Some(name) => name,
-        None => {
-            return Err(anyhow!("Cannot get file name for {}", path.display()));
-        }
-    };
-    
     // 检查是否以 .kitty_enc 结尾
-    if !file_name.ends_with(&format!(".{}", ENC_SUFFIX)) {
-        return Err(anyhow!("Encrypted file does not end with .{}: {}", ENC_SUFFIX, path.display()));
-    }
-    
-    // 删除 .kitty_enc 后缀得到源文件名
-    let out_name = &file_name[..file_name.len() - format!(".{}", ENC_SUFFIX).len()];
-    let parent = path.parent().unwrap_or(Path::new("."));
-    let out_path = parent.join(out_name);
-    
+    if let Some(orig_ext) = path.extension() {
+        if orig_ext == ENC_SUFFIX{
+            // pass
+        } else {
+            return Err(anyhow!("Encrypted file does not end with .{}: {}", ENC_SUFFIX, path.display()));
+        }
+    } else {
+            return Err(anyhow!("Cannot get file extension: {}", path.display()));
+    };
+
+    let mut out_path = PathBuf::from(path);
+    out_path.set_extension("");
+
     // 检查解密后的文件是否已经存在，存在则跳过
     if out_path.exists() {
         eprintln!("Warning: Target file {} already exists, you need to fix it", out_path.display());
@@ -642,23 +634,19 @@ pub fn decrypt_file_streaming(path: &Path, master_key: &Key) -> Result<i32> {
 }
 
 fn check_whether_src_file_exist(enc_path: &Path) -> Result<bool>{
-    // 获取文件名
-    let file_name = match enc_path.file_name().and_then(|n| n.to_str()) {
-        Some(name) => name,
-        None => {
-            return Err(anyhow!("Cannot get file name for {}", enc_path.display()));
-        }
-    };
-    
     // 检查是否以 .kitty_enc 结尾
-    if !file_name.ends_with(&format!(".{}", ENC_SUFFIX)) {
-        return Err(anyhow!("Encrypted file does not end with .{}: {}", ENC_SUFFIX, enc_path.display()));
-    }
-    
-    // 删除 .kitty_enc 后缀得到源文件名
-    let out_name = &file_name[..file_name.len() - format!(".{}", ENC_SUFFIX).len()];
-    let parent = enc_path.parent().unwrap_or(Path::new("."));
-    let out_path = parent.join(out_name);
+    if let Some(orig_ext) = enc_path.extension() {
+        if orig_ext == ENC_SUFFIX{
+            // pass
+        } else {
+            return Err(anyhow!("Encrypted file does not end with .{}: {}", ENC_SUFFIX, enc_path.display()));
+        }
+    } else {
+            return Err(anyhow!("Cannot get file extension: {}", enc_path.display()));
+    };
+
+    let mut out_path = PathBuf::from(enc_path);
+    out_path.set_extension("");
 
     // 检查解密后的文件是否已经存在，存在则跳过
     if out_path.exists() {

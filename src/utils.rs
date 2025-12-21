@@ -36,34 +36,20 @@ pub fn normalize_path(path: &Path) -> PathBuf {
 
 pub fn filter_entry(e: &DirEntry) -> bool {
     // 跳过 . 开头的文件和文件夹
-    match e.file_name().to_str() {
-        Some(name) => {
-            // 过滤以点开头的目录（如 .git, .vscode 等）
-            if name.starts_with('.') {
-                return false;
-            }
-        }
-        None => {
-            // 如果文件名无法转换为字符串，可能是编码问题
-            // 我们选择不过滤它，继续处理
-        }
+    let name = e.file_name().to_string_lossy();
+    // 过滤以点开头的目录（如 .git, .vscode 等）
+    if name.starts_with('.') {
+        return false;
     }
     true
 }
 
 pub fn ignore_filter_entry(e: &ignore_DirEntry) -> bool {
     // 跳过 . 开头的文件和文件夹
-    match e.file_name().to_str() {
-        Some(name) => {
-            // 过滤以点开头的目录（如 .git, .vscode 等）
-            if name.starts_with('.') {
-                return false;
-            }
-        }
-        None => {
-            // 如果文件名无法转换为字符串，可能是编码问题
-            // 我们选择不过滤它，继续处理
-        }
+    let name = e.file_name().to_string_lossy();
+    // 过滤以点开头的目录（如 .git, .vscode 等）
+    if name.starts_with('.') {
+        return false;
     }
     true
 }
@@ -100,6 +86,7 @@ pub fn is_key_file(path: &Path, key_path_opt: Option<&Path>) -> Result<bool> {
 
 pub fn is_encrypted_file(path: &Path) -> bool {
     // 使用 to_string_lossy() 处理所有可能的文件名
+    // 2025.12.21 .在几乎所有编码中字节都是一致的,这个判断方法可行
     path.file_name()
         .map(|n| n.to_string_lossy())
         .map_or(false, |name| name.ends_with(&format!(".{}", ENC_SUFFIX)))
