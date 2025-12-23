@@ -374,8 +374,8 @@ fn read_password_utf8(prompt:&str) -> Result<String> {
             println!("Cleaning up what you've typed...");
             passwd.zeroize();
         }
-        println!("Bye");
-        std::process::exit(0);
+        println!("The program may report some errors, but don't worry.");
+        return Err(anyhow!("User interrupted. Goodbye."));
     }
     result
 }
