@@ -322,7 +322,7 @@ fn normalize_optional_path(path: &mut Option<PathBuf>, run_dir: &PathBuf) {
             *path = run_dir.join(&path);
         }
         // 规范化路径（移除 . 和 ..）
-        *path = normalize_path(&path);
+        *path = normalize_path(&path, run_dir);
     }
 }
 

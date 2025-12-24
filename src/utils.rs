@@ -8,7 +8,7 @@ use ignore::DirEntry as ignore_DirEntry;
 use crate::*;
 
 /// 规范化路径，移除 . 和 .. 组件
-pub fn normalize_path(path: &Path) -> PathBuf {
+pub fn normalize_path(path: &Path, run_dir: &Path) -> PathBuf {
     // 使用更简洁的方式规范化路径
     let mut normalized = PathBuf::new();
     
@@ -28,7 +28,7 @@ pub fn normalize_path(path: &Path) -> PathBuf {
     }
     
     if normalized.as_os_str().is_empty() {
-        PathBuf::from(".")
+        run_dir.to_path_buf()// 统一绝对路径不可能执行到这里，还是兜底
     } else {
         normalized
     }

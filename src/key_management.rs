@@ -125,7 +125,7 @@ pub fn get_or_create_key_path(
         None => {
             // 确定目标目录：如果target_dir_or_file是文件，则取其父目录；否则就是目录本身
             let target_dir = if target_dir_or_file.is_file() {
-                target_dir_or_file.parent().unwrap_or(Path::new("."))
+                target_dir_or_file.parent().unwrap_or(target_dir_or_file)// 文件不可能没有父目录，但还是兜底
             } else {
                 target_dir_or_file
             };
@@ -143,6 +143,7 @@ pub fn get_or_create_key_path(
                     // 没有现有密钥文件，生成新的（生成在目标目录中）
                     let key_filename = generate_key_filename(target_dir);
                     let p = target_dir.join(key_filename);
+                    println!("No key file found in {} directory. Generating new key file: {}", operation, p.display());
                     let mut passphrase_opt = match read_passphrase_interactive() {
                         Ok(passphrase) => Some(passphrase),
                         Err(e) => {
@@ -215,7 +216,7 @@ pub fn load_key(path: &Path, mut passphrase_opt_from_creat: Option<String>) -> R
             }
         }
     } else {
-        // 没有密码短语，直接使用文件中的密钥
+        // 没有密码短语，直接使用文件中的密钥 // 2025.12.24 不可能到这一步
         if bytes.len() != 32 {
             Err(anyhow!("Invalid key length: expected 32 bytes, got {}", bytes.len()))
         } else {
