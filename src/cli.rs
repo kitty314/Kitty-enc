@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 use crate::*;
 
@@ -58,9 +58,7 @@ pub const AFTER_HELP: &str = "
       * 使用任意文件的内容派生密钥
       * 文件必须至少32字节大小
       * 程序会读取文件前1MB内容用于密钥派生
-      * 可以结合密码使用：使用文件内容+密码派生密钥
-      * 不使用密码时，使用文件前16字节作为盐
-      * 使用密码时，密码作为盐（长度不足16字节补0，超过16字节使用全长）
+      * 可以结合密码使用
       * 适用于需要基于特定文件生成密钥的场景
   - 修复模式 (-f):
       * 希望永远不要用到它
@@ -151,8 +149,8 @@ pub fn is_interrupted() -> bool {
 fn set_ctrlc_handler() -> Result<()>{
     ctrlc::set_handler(move || {
         INTERRUPTED.store(true, Ordering::SeqCst);
-        println!("\n\nInterrupt signal received. Gracefully stopping after current operations...");
-        println!("If you are entering your password, just press Enter to finish.")
+        my_println!("\n\nInterrupt signal received. Gracefully stopping after current operations...");
+        my_println!("If you are entering your password, just press Enter to finish.")
     }).context("Failed to set Ctrl+C handler")?;
     Ok(())
 }
@@ -172,11 +170,9 @@ pub fn handle_cli(mut cli: Cli) -> Result<()> {
         // No subcommand, no -s/-d: auto encrypt current dir, generate key if none
         (None, None, None, None, key_opt, None, false) => {
             let (key_path,passphrase_opt) = get_or_create_key_path(&run_dir, key_opt, "current")?;
-            let mut key = load_key(&key_path,passphrase_opt)?;
-            let result = process_encrypt_dir(&run_dir, &key, Some(&key_path), &exe_path);
-            key.zeroize();
-            result?;
-            println!("Encryption completed for {}", run_dir.display());
+            let key: Zeroizing<[u8; 32]> = load_key(&key_path,passphrase_opt)?;
+            process_encrypt_dir(&run_dir, &key, Some(&key_path), &exe_path)?;
+            my_println!("Encryption completed for {}", run_dir.display());
             Ok(())
         }
 
@@ -184,11 +180,9 @@ pub fn handle_cli(mut cli: Cli) -> Result<()> {
         (Some(Mode::Encrypt { src_dir: Some(src_dir), key_file: key_opt }), None, None, None, None, None,false) 
         | (None, Some(src_dir), None, None, key_opt, None, false) => {
             let (key_path,passphrase_opt) = get_or_create_key_path(src_dir, key_opt, "source")?;
-            let mut key = load_key(&key_path,passphrase_opt)?;
-            let result = process_encrypt_dir(src_dir, &key, Some(&key_path), &exe_path);
-            key.zeroize();
-            result?;
-            println!("Encryption completed for {}", src_dir.display());
+            let key: Zeroizing<[u8; 32]> = load_key(&key_path,passphrase_opt)?;
+            process_encrypt_dir(src_dir, &key, Some(&key_path), &exe_path)?;
+            my_println!("Encryption completed for {}", src_dir.display());
             Ok(())
         }
 
@@ -196,114 +190,94 @@ pub fn handle_cli(mut cli: Cli) -> Result<()> {
         (Some(Mode::Decrypt { dec_dir: Some(dec_dir), key_file: key_opt }), None, None, None, None, None,false) 
         | (None, None, Some(dec_dir), None, key_opt, None, false) => {
             let (key_path,passphrase_opt) = get_or_create_key_path(dec_dir, key_opt, "decryption")?;
-            let mut key = load_key(&key_path,passphrase_opt)?;
-            let result = process_decrypt_dir(dec_dir, &key, &exe_path, Some(&key_path));
-            key.zeroize();
-            result?;
-            println!("Decryption completed for {}", dec_dir.display());
+            let key: Zeroizing<[u8; 32]> = load_key(&key_path,passphrase_opt)?;
+            process_decrypt_dir(dec_dir, &key, &exe_path, Some(&key_path))?;
+            my_println!("Decryption completed for {}", dec_dir.display());
             Ok(())
         }
 
         // Fix mode: -f dir (key optional -> search in fix directory)
         (None, None, None, Some(fix_dir), key_opt, None, false) => {
             let (key_path,passphrase_opt) = get_or_create_key_path(fix_dir, key_opt, "fix")?;
-            let mut key = load_key(&key_path,passphrase_opt)?;
-            let result = process_fix_dir(fix_dir, &key, &exe_path, Some(&key_path));
-            key.zeroize();
-            result?;
-            println!("Fix completed for {}", fix_dir.display());
+            let key: Zeroizing<[u8; 32]> = load_key(&key_path,passphrase_opt)?;
+            process_fix_dir(fix_dir, &key, &exe_path, Some(&key_path))?;
+            my_println!("Fix completed for {}", fix_dir.display());
             Ok(())
         }
 
         // 任意文件模式：加密当前目录
         (None, None, None, None, None, Some(any_file), &passwd_only) => {
             let need_confirm = passwd_only; // 加密时需要确认密码
-            let mut key = derive_key_from_any_file(any_file, passwd_only, need_confirm)?;
-            let result = process_encrypt_dir(&run_dir, &key, Some(any_file), &exe_path);
-            key.zeroize();
-            result?;
+            let key: Zeroizing<[u8; 32]> = derive_key_from_any_file(any_file, passwd_only, need_confirm)?;
+            process_encrypt_dir(&run_dir, &key, Some(any_file), &exe_path)?;
             let mode_str = if passwd_only { "any-file mode with password" } else { "any-file mode, no password" };
-            println!("Encryption completed for {} ({})", run_dir.display(), mode_str);
+            my_println!("Encryption completed for {} ({})", run_dir.display(), mode_str);
             Ok(())
         }
 
         // 任意文件模式：加密指定目录
         (None, Some(src_dir), None, None, None, Some(any_file), &passwd_only) => {
             let need_confirm = passwd_only; // 加密时需要确认密码
-            let mut key = derive_key_from_any_file(any_file, passwd_only, need_confirm)?;
-            let result = process_encrypt_dir(src_dir, &key, Some(any_file), &exe_path);
-            key.zeroize();
-            result?;
+            let key: Zeroizing<[u8; 32]> = derive_key_from_any_file(any_file, passwd_only, need_confirm)?;
+            process_encrypt_dir(src_dir, &key, Some(any_file), &exe_path)?;
             let mode_str = if passwd_only { "any-file mode with password" } else { "any-file mode, no password" };
-            println!("Encryption completed for {} ({})", src_dir.display(), mode_str);
+            my_println!("Encryption completed for {} ({})", src_dir.display(), mode_str);
             Ok(())
         }
 
         // 任意文件模式：解密指定目录
         (None, None, Some(dec_dir), None, None, Some(any_file), &passwd_only) => {
             let need_confirm = false; // 解密时不需要确认密码
-            let mut key = derive_key_from_any_file(any_file, passwd_only, need_confirm)?;
-            let result = process_decrypt_dir(dec_dir, &key, &exe_path, Some(any_file));
-            key.zeroize();
-            result?;
+            let key: Zeroizing<[u8; 32]> = derive_key_from_any_file(any_file, passwd_only, need_confirm)?;
+            process_decrypt_dir(dec_dir, &key, &exe_path, Some(any_file))?;
             let mode_str = if passwd_only { "any-file mode with password" } else { "any-file mode, no password" };
-            println!("Decryption completed for {} ({})", dec_dir.display(), mode_str);
+            my_println!("Decryption completed for {} ({})", dec_dir.display(), mode_str);
             Ok(())
         }
 
         // 任意文件模式：修复指定目录
         (None, None, None, Some(fix_dir), None, Some(any_file), &passwd_only) => {
             let need_confirm = false; // 修复时不需要确认密码
-            let mut key = derive_key_from_any_file(any_file, passwd_only, need_confirm)?;
-            let result = process_fix_dir(fix_dir, &key, &exe_path, Some(any_file));
-            key.zeroize();
-            result?;
+            let key: Zeroizing<[u8; 32]> = derive_key_from_any_file(any_file, passwd_only, need_confirm)?;
+            process_fix_dir(fix_dir, &key, &exe_path, Some(any_file))?;
             let mode_str = if passwd_only { "any-file mode with password" } else { "any-file mode, no password" };
-            println!("Fix completed for {} ({})", fix_dir.display(), mode_str);
+            my_println!("Fix completed for {} ({})", fix_dir.display(), mode_str);
             Ok(())
         }
 
         // 纯密码模式：加密当前目录
         (None, None, None, None, None, None, true) => {
-            let passwd = read_passwd_interactive()?;
-            let mut key = derive_key_from_password(passwd)?;
-            let result = process_encrypt_dir(&run_dir, &key, None, &exe_path);
-            key.zeroize();
-            result?;
-            println!("Encryption completed for {} (password-only mode)", run_dir.display());
+            let passwd: Zeroizing<String> = read_passwd_interactive()?;
+            let key: Zeroizing<[u8; 32]> = derive_key_from_password(passwd)?;
+            process_encrypt_dir(&run_dir, &key, None, &exe_path)?;
+            my_println!("Encryption completed for {} (password-only mode)", run_dir.display());
             Ok(())
         }
 
         // 纯密码模式：加密指定目录
         (None, Some(src_dir), None, None, None, None, true) => {
-            let passwd = read_passwd_interactive()?;
-            let mut key = derive_key_from_password(passwd)?;
-            let result = process_encrypt_dir(src_dir, &key, None, &exe_path);
-            key.zeroize();
-            result?;
-            println!("Encryption completed for {} (password-only mode)", src_dir.display());
+            let passwd: Zeroizing<String> = read_passwd_interactive()?;
+            let key: Zeroizing<[u8; 32]> = derive_key_from_password(passwd)?;
+            process_encrypt_dir(src_dir, &key, None, &exe_path)?;
+            my_println!("Encryption completed for {} (password-only mode)", src_dir.display());
             Ok(())
         }
 
         // 纯密码模式：解密指定目录
         (None, None, Some(dec_dir), None, None, None, true) => {
-            let passwd = read_passwd_interactive_once()?;
-            let mut key = derive_key_from_password(passwd)?;
-            let result = process_decrypt_dir(dec_dir, &key, &exe_path, None);
-            key.zeroize();
-            result?;
-            println!("Decryption completed for {} (password-only mode)", dec_dir.display());
+            let passwd: Zeroizing<String> = read_passwd_interactive_once()?;
+            let key: Zeroizing<[u8; 32]> = derive_key_from_password(passwd)?;
+            process_decrypt_dir(dec_dir, &key, &exe_path, None)?;
+            my_println!("Decryption completed for {} (password-only mode)", dec_dir.display());
             Ok(())
         }
 
         // 纯密码模式：修复指定目录
         (None, None, None, Some(fix_dir), None, None, true) => {
-            let passwd = read_passwd_interactive_once()?;
-            let mut key = derive_key_from_password(passwd)?;
-            let result = process_fix_dir(fix_dir, &key, &exe_path, None);
-            key.zeroize();
-            result?;
-            println!("Fix completed for {} (password-only mode)", fix_dir.display());
+            let passwd: Zeroizing<String> = read_passwd_interactive_once()?;
+            let key: Zeroizing<[u8; 32]> = derive_key_from_password(passwd)?;
+            process_fix_dir(fix_dir, &key, &exe_path, None)?;
+            my_println!("Fix completed for {} (password-only mode)", fix_dir.display());
             Ok(())
         }
 
@@ -354,7 +328,7 @@ pub fn print_help() {
     // 打印 clap 的默认帮助信息
     let mut cmd = Cli::command();
     if let Err(e) = cmd.print_help() {
-        eprintln!("Failed to print help: {}", e);
+        my_eprintln!("Failed to print help: {}", e);
     }
-    eprintln!();
+    my_eprintln!();
 }

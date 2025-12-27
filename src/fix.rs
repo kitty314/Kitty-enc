@@ -5,95 +5,122 @@ use std::path::{Path, PathBuf};
 use sha2::{Sha256, Digest};
 use ignore::WalkBuilder;
 use ignore::DirEntry as ignore_DirEntry;
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
+use rayon::prelude::*;  // 添加 rayon 并行处理
 
 use crate::*;
 
 /// 处理修复目录
-pub fn process_fix_dir(dir: &Path, master_key: &Key, exe_path: &Path, key_path_opt: Option<&Path>) -> Result<i32> {
+pub fn process_fix_dir(dir: &Path, master_key: &[u8;32], exe_path: &Path, key_path_opt: Option<&Path>) -> Result<i32> {
+    my_println!("Starting file collection...");
     // 收集加密文件并查找重复的文件对
     let (duplicate_pairs, interrupted) = collect_files_for_fix(dir, exe_path, key_path_opt)?;
     
     // 如果被中断，直接退出
     if interrupted {
-        println!("Fix operation interrupted by user");
+        my_println!("Fix operation interrupted by user");
         return Ok(1);
     }
 
-    println!("Found {} duplicate file pairs to fix", duplicate_pairs.len());  
+    my_println!("Found {} duplicate file pairs to fix", duplicate_pairs.len());  
     
     if duplicate_pairs.is_empty() {
-        println!("No duplicate files found, nothing to fix.");
+        my_println!("No duplicate files found, nothing to fix.");
         return Ok(0);
     }
     
 
-    // 对所有重复文件对进行验证和修复
+    // 使用 rayon 并行处理文件对
+    let results: Vec<Result<FixResult>> = duplicate_pairs
+        .par_iter()
+        .map(|(src_path, enc_path)| {
+            // 检查中断标志，如果已中断则跳过此文件对
+            if crate::cli::is_interrupted() {
+                my_println!("Skipping duplicate pair due to interrupt signal");
+                return Ok(FixResult::Interrupt);
+            }
+
+            let result = verify_and_fix_pair(src_path, enc_path, master_key);
+            
+            match &result {
+                Ok(fix_result) => {
+                    match fix_result {
+                        FixResult::DeletedEncrypted => {
+                            my_println!("Fixing duplicate pair: \n  Source: {}, \n  Encrypted: {} \n  -> Deleted encrypted file (encrypted file is incomplete)", src_path.display(), enc_path.display());
+                        }
+                        FixResult::DeletedSource => {
+                            my_println!("Fixing duplicate pair: \n  Source: {}, \n  Encrypted: {} \n  -> Deleted source file (source file is incomplete)", src_path.display(), enc_path.display());
+                        }
+                        FixResult::Interrupt => {
+                            my_println!("Fixing duplicate pair: \n  Source: {}, \n  Encrypted: {} \n  -> Interrupted, stopping fix operation", src_path.display(), enc_path.display());
+                        }
+                        FixResult::ManualRequired{reason} => {
+                            my_println!("Fixing duplicate pair: \n  Source: {}, \n  Encrypted: {} \n  -> {reason} Manual intervention required, skipping", src_path.display(), enc_path.display());
+                        }
+                    }
+                }
+                Err(e) => {
+                    my_eprintln!("Fixing duplicate pair: \n  Source: {}, \n  Encrypted: {} \n  -> Error fixing pair: {}", src_path.display(), enc_path.display(), e);
+                }
+            }
+            
+            result
+        })
+        .collect();
+    
+    // 统计结果
     let mut auto_processed_count = 0;
     let mut deleted_encrypted_count = 0;
     let mut deleted_source_count = 0;
     let mut error_count = 0;
     let mut manual_required_count = 0;
+    let mut skipped_interrupt_count = 0;
     let mut manual_pairs = Vec::new();
     
-    for (src_path, enc_path) in duplicate_pairs.iter() {
-        // 检查中断标志
-        if crate::cli::is_interrupted() {
-            println!("Interrupt signal received, skipping duplicate pair fix.");
-            // return Ok(1);
-            break;
-        }
-
-        println!("Fixing duplicate pair:");
-        println!("  Source file: {}", src_path.display());
-        println!("  Encrypted file: {}", enc_path.display());
-        
-        match verify_and_fix_pair(src_path, enc_path, master_key) {
-            Ok(result) => {
-                match result {
+    for (i, result) in results.iter().enumerate() {
+        match result {
+            Ok(fix_result) => {
+                match fix_result {
                     FixResult::DeletedEncrypted => {
-                        println!("  -> Deleted encrypted file (encrypted file is incomplete)");
                         deleted_encrypted_count += 1;
                         auto_processed_count += 1;
                     }
                     FixResult::DeletedSource => {
-                        println!("  -> Deleted source file (source file is incomplete)");
                         deleted_source_count += 1;
                         auto_processed_count += 1;
                     }
                     FixResult::Interrupt => {
-                        println!("  -> Interrupted, stopping fix operation");
-                        // return Ok(1);
-                        break;
+                        skipped_interrupt_count += 1;
                     }
-                    FixResult::ManualRequired{reason} => {
-                        println!("  -> {reason} Manual intervention required, skipping");
+                    FixResult::ManualRequired{reason: _} => {
                         manual_required_count += 1;
-                        manual_pairs.push((src_path, enc_path));
+                        if i < duplicate_pairs.len() {
+                            manual_pairs.push((duplicate_pairs[i].0.clone(), duplicate_pairs[i].1.clone()));
+                        }
                     }
                 }
             }
-            Err(e) => {
-                eprintln!("  -> Error fixing pair: {}", e);
+            Err(_) => {
                 error_count += 1;
             }
         }
     }
     
-    println!("Fix summary:");
-    println!("  Found {} duplicate file pairs", duplicate_pairs.len());
-    println!("  Successfully processed {} pairs", auto_processed_count);
-    println!("  {} pairs failed", error_count);
-    println!("  {} pairs require manual intervention", manual_required_count);
-    println!("  {} pairs not processed", duplicate_pairs.len()-auto_processed_count-error_count-manual_required_count);
-    println!("  Deleted {} encrypted files automatically", deleted_encrypted_count);
-    println!("  Deleted {} source files automatically", deleted_source_count);
+    my_println!("Fix summary:");
+    my_println!("  Found {} duplicate file pairs", duplicate_pairs.len());
+    my_println!("  Successfully processed {} pairs", auto_processed_count);
+    my_println!("  {} pairs failed", error_count);
+    my_println!("  {} pairs require manual intervention", manual_required_count);
+    my_println!("  {} pairs skipped (interrupted)", skipped_interrupt_count);
+    my_println!("  {} pairs not processed", duplicate_pairs.len()-auto_processed_count-error_count-manual_required_count-skipped_interrupt_count);
+    my_println!("  Deleted {} encrypted files automatically", deleted_encrypted_count);
+    my_println!("  Deleted {} source files automatically", deleted_source_count);
 
     // 打印需要手动处理的文件对
     if !manual_pairs.is_empty() {
-        println!("\nFiles requiring manual intervention:");
+        my_println!("\nFiles requiring manual intervention:");
         for (i, (src_path, enc_path)) in manual_pairs.iter().enumerate() {
-            println!("  {}.\tSource: {}\n\tEncrypted: {}\n", 
+            my_println!("  {}.\tSource: {}\n\tEncrypted: {}\n", 
                 i + 1, 
                 src_path.display(), 
                 enc_path.display());
@@ -105,11 +132,7 @@ pub fn process_fix_dir(dir: &Path, master_key: &Key, exe_path: &Path, key_path_o
 
 /// 收集加密文件并查找重复的文件对
 /// 返回元组：(重复文件对列表, 是否被中断)
-fn collect_files_for_fix(
-    dir: &Path,
-    exe_path: &Path,
-    key_path_opt: Option<&Path>,
-) -> Result<(Vec<(PathBuf, PathBuf)>, bool)> {
+fn collect_files_for_fix(dir: &Path, exe_path: &Path, key_path_opt: Option<&Path>) -> Result<(Vec<(PathBuf, PathBuf)>, bool)> {
     let mut pairs = Vec::new();
     let mut interrupted = false;
 
@@ -136,7 +159,7 @@ fn collect_files_for_fix(
     {
         // 检查中断标志
         if crate::cli::is_interrupted() {
-            println!("Interrupt signal received, stopping file collection");
+            my_println!("Interrupt signal received, stopping file collection");
             interrupted = true;
             break;
         }
@@ -202,7 +225,7 @@ enum FixResult {
 }
 
 /// 验证并修复文件对
-fn verify_and_fix_pair(src_path: &Path, enc_path: &Path, master_key: &Key) -> Result<FixResult> {
+fn verify_and_fix_pair(src_path: &Path, enc_path: &Path, master_key: &[u8;32]) -> Result<FixResult> {
     // 首先验证加密文件完整性
     let verify_encrypted_file_code: i32 = verify_encrypted_file(src_path,enc_path , master_key)?;
     if verify_encrypted_file_code == 1 {
@@ -237,12 +260,12 @@ fn verify_and_fix_pair(src_path: &Path, enc_path: &Path, master_key: &Key) -> Re
     }
     if verify_encrypted_file_code == 0{
         // 加密文件完整，检查源文件完整性
-        let verify_decrypted_file_code = verify_decrypted_file(src_path, enc_path)?;
+        let verify_decrypted_file_code = verify_decrypted_file(src_path, enc_path, master_key)?;
         if verify_decrypted_file_code == 1 {
             return Ok(FixResult::Interrupt);
         }
         if verify_decrypted_file_code == 2 {
-            return Ok(FixResult::ManualRequired{reason:"源文件无法打开".to_string()});
+            return Ok(FixResult::ManualRequired{reason:"源文件或加密文件无法打开".to_string()});
         }
         if verify_decrypted_file_code == 99||verify_decrypted_file_code == 98 {
             // 源文件不完整，删除源文件
@@ -259,14 +282,14 @@ fn verify_and_fix_pair(src_path: &Path, enc_path: &Path, master_key: &Key) -> Re
 }
 
 /// 验证加密文件完整性
-fn verify_encrypted_file(src_path: &Path, enc_path: &Path, master_key: &Key) -> Result<i32> {    
+fn verify_encrypted_file(src_path: &Path, enc_path: &Path, master_key: &[u8;32]) -> Result<i32> {    
     // 检查文件是否过小
     let metadata = fs::metadata(enc_path)?;
-    if metadata.len() < 24 + 4 + 32 {
+    if metadata.len() < 48 + 4 + 48 {
         return Ok(99);
     }
     let src_metadata =fs::metadata(src_path)?;
-    if metadata.len() < src_metadata.len() {
+    if metadata.len() <= src_metadata.len() {
         return Ok(99);
     }
 
@@ -290,93 +313,84 @@ fn verify_encrypted_file(src_path: &Path, enc_path: &Path, master_key: &Key) -> 
             }
         }
         Err(e) => {
-            eprintln!("Error verifying {}: {}", enc_path.display(), e);
+            // my_eprintln!("Error verifying {}: {}", enc_path.display(), e);
             Err(e)
         }
     }
 }
 
 /// 验证普通加密文件（只解密验证，不写入文件）
-fn verify_regular_encrypted_file(path: &Path, master_key: &Key) -> Result<i32> {
+fn verify_regular_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     // 检查中断标志
     if crate::cli::is_interrupted() {
-        println!("Interrupt signal received, skipping verification of {}", path.display());
+        my_println!("Interrupt signal received, skipping verification of {}", path.display());
         return Ok(1);
     }
     
     // 检查加密文件是否可访问
     if let Err(_e) = fs::OpenOptions::new().read(true).write(true).open(path) {
-        eprintln!("Warning: Encrypted file {} cannot be opened (file open exception).", path.display());
+        my_eprintln!("Warning: Encrypted file {} cannot be opened (file open exception).", path.display());
         return Ok(2); // 返回特殊代码表示文件打开异常
     }
 
     //开始读取加密文件
-    let mut data = Vec::new();
-    if let Err(e) = File::open(path)
+    let mut data: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::new());
+    File::open(path)
         .with_context(|| format!("Failed to open file for decryption: {}", path.display()))
         .and_then(|mut file| file.read_to_end(&mut data)
-        .with_context(|| format!("Failed to read encrypted file: {}", path.display())))
-    {
-        // 安全擦除可能已读取的部分数据
-        data.zeroize();
-        return Err(e);
-    };
+        .with_context(|| format!("Failed to read encrypted file: {}", path.display())))?;
 
-    // 分离 xnonce、加密类型标记、密文和存储的哈希
-    let (xnonce_bytes, rest) = data.split_at(24);
+    // 分离 all_xnonce、加密类型标记、密文和存储的加密哈希
+    let (all_xnonce_bytes, rest) = data.split_at(48);
     let (enc_type_marker, rest) = rest.split_at(4);
-    let (ct, stored_hash_bytes) = rest.split_at(rest.len() - 32);
+    let (ct, stored_encrypted_hash_bytes) = rest.split_at(rest.len() - 48);
     
     // 检查加密类型标记：应该是4字节0表示普通加密
     if enc_type_marker != [0u8; 4] {
-        // 安全擦除敏感数据
-        data.zeroize();
         return Err(anyhow!("Invalid encryption type marker in file: {}", path.display()));
     }
-    
-    let xnonce = XNonce::from_slice(xnonce_bytes);
+
+    // 拆分all_xnonce为文件nonce和哈希nonce
+    let (file_xnonce_bytes, hash_xnonce_bytes) = all_xnonce_bytes.split_at(24);
+    let file_xnonce = XNonce::from_slice(file_xnonce_bytes);
     
     // 使用主密钥和nonce作为盐派生子密钥
-    let mut subkey = derive_subkey_simple(master_key.as_slice().try_into().unwrap(), xnonce_bytes)?;
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(&subkey));
+    let subkey: Zeroizing<[u8; 32]> = derive_subkey_simple(master_key, all_xnonce_bytes)?;
+    let cipher = XChaCha20Poly1305::new(Key::from_slice(subkey.as_ref()));
     
-    let mut pt = match cipher.decrypt(xnonce, ct) {
-        Ok(pt) => pt,
+    let pt: Zeroizing<Vec<u8>> = match cipher.decrypt(file_xnonce, ct) {
+        Ok(pt) => Zeroizing::new(pt),
         Err(_) => {
-            // 安全擦除敏感数据
-            data.zeroize();
-            subkey.zeroize();
-            return Ok(98);// 不能绝对确定加密文件不完整，有可能是密钥输入有误或计算错误
+            return Ok(98);
         }
     };
 
     // 验证解密后的数据哈希是否匹配
     let mut hasher_verify = Sha256::new();
     hasher_verify.update(&pt);
-    let decrypted_hash = hasher_verify.finalize();
+    let decrypted_hash:Zeroizing<[u8;32]> = Zeroizing::new(hasher_verify.finalize_reset().into());
     
-    if decrypted_hash.as_slice() != stored_hash_bytes {
-        // 安全擦除敏感数据
-        subkey.zeroize();
-        pt.zeroize();
+    // 解密存储的哈希
+    let decrypted_stored_hash: Zeroizing<[u8; 32]> = match decrypt_file_hash(stored_encrypted_hash_bytes, &subkey, hash_xnonce_bytes) {
+        Ok(hash) => hash,
+        Err(_) => {return Ok(98);}
+    };
+
+
+    if decrypted_hash != decrypted_stored_hash {
         return Ok(98);// 不能绝对确定加密文件不完整，有可能是密钥输入有误或计算错误
     }
-
-    // data.zeroize(); 其实 data 是密文, 应该不需要太严格
-    subkey.zeroize();
-    pt.zeroize();
 
     Ok(0)
 }
 
-
 /// 验证流式加密文件
-fn verify_streaming_encrypted_file(path: &Path, master_key: &Key) -> Result<i32> {
+fn verify_streaming_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     use std::io::{BufReader, Read};
     
     // 检查加密文件是否可访问
     if let Err(_e) = fs::OpenOptions::new().read(true).write(true).open(path) {
-        eprintln!("Warning: Encrypted file {} cannot be opened (file open exception).", path.display());
+        my_eprintln!("Warning: Encrypted file {} cannot be opened (file open exception).", path.display());
         return Ok(2); // 返回特殊代码表示文件打开异常
     }
 
@@ -385,21 +399,20 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &Key) -> Result<i32>
         .with_context(|| format!("Failed to open file for streaming decryption: {}", path.display()))?;
     let mut reader = BufReader::new(encrypted_file);
     
-    // 读取前24字节作为主 XNonce
-    let mut xnonce_bytes = [0u8; 24];
-    if let Err(e) = reader.read_exact(&mut xnonce_bytes)
-        .with_context(|| format!("Failed to read xnonce from encrypted file: {}", path.display()))
-    {
-        // 安全擦除敏感数据
-        xnonce_bytes.zeroize();
-        return Err(e);
+    // 读取前48字节作为 all_xnonce（24字节文件nonce + 24字节哈希nonce）
+    let mut all_xnonce_bytes = [0u8; 48];
+    if let Err(e) = reader.read_exact(&mut all_xnonce_bytes) {
+        return Err(e).with_context(|| format!("Failed to read all_xnonce from encrypted file: {}", path.display()));
     };
-        
-    // 使用主密钥和nonce作为盐派生子密钥
-    let mut subkey = derive_subkey_simple(master_key.as_slice().try_into().unwrap(), &xnonce_bytes)?;
+    
+    // 拆分all_xnonce为文件nonce和哈希nonce
+    let (file_xnonce_bytes, hash_xnonce_bytes) = all_xnonce_bytes.split_at(24);
+
+    // 使用主密钥和all_xnonce作为盐派生子密钥（与加密保持一致）
+    let subkey: Zeroizing<[u8; 32]> = derive_subkey_simple(master_key, &all_xnonce_bytes)?;
     
     // 使用 XChaCha20Poly1305 进行流式解密
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(&subkey));
+    let cipher = XChaCha20Poly1305::new(Key::from_slice(subkey.as_ref()));
     
     let mut block_counter: u64 = 0;
     let mut verify_hasher = Sha256::new();
@@ -408,10 +421,7 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &Key) -> Result<i32>
     loop {
         // 检查中断标志
         if crate::cli::is_interrupted() {
-            println!("Interrupt signal received, stopping verification of {}", path.display());
-            // 安全擦除敏感数据
-            xnonce_bytes.zeroize();
-            subkey.zeroize();
+            my_println!("Interrupt signal received, stopping verification of {}", path.display());
             return Ok(1); // 返回成功，表示已停止处理
         }
         
@@ -420,10 +430,6 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &Key) -> Result<i32>
         if let Err(e) = reader.read_exact(&mut block_size_bytes)
             // .with_context(|| format!("Failed to read block size from encrypted file: {}", path.display()))
         {
-            // 安全擦除敏感数据
-            block_size_bytes.zeroize();
-            xnonce_bytes.zeroize();
-            subkey.zeroize();
             match e.kind() {
                 std::io::ErrorKind::UnexpectedEof => {return Ok(99);}
                 _ => {return Err(anyhow!("Failed to read block size from encrypted file: {}", path.display()));}           
@@ -431,9 +437,6 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &Key) -> Result<i32>
         }
         
         let block_size = u32::from_le_bytes(block_size_bytes);
-        
-        // 安全擦除块大小字节
-        block_size_bytes.zeroize();
         
         // 如果块大小为0，表示文件结束
         if block_size == 0 {
@@ -446,42 +449,24 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &Key) -> Result<i32>
         let block_size = block_size as usize;
         
         // 读取加密块
-        let mut encrypted_block = vec![0u8; block_size];
+        let mut encrypted_block: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; block_size]);
         if let Err(e) = reader.read_exact(&mut encrypted_block)
             // .with_context(|| format!("Failed to read encrypted block {} from file: {}", block_counter, path.display()))
         {
-            // 安全擦除敏感数据
-            encrypted_block.zeroize();
-            xnonce_bytes.zeroize();
-            subkey.zeroize();
             match e.kind() {
                 std::io::ErrorKind::UnexpectedEof => {return Ok(99);}
                 _ => {return Err(anyhow!("Failed to read encrypted block {} from file: {}", block_counter, path.display()));}           
             }
         }
         
-        // 为当前块生成 nonce：使用主 nonce + 块计数器拼接
-        let mut block_nonce_bytes = [0u8; 24];
-        
-        // 复制主 nonce 的前 16 字节
-        block_nonce_bytes[..16].copy_from_slice(&xnonce_bytes[..16]);
-        
-        // 后 8 字节使用块计数器的 LE 编码
-        let counter_bytes = block_counter.to_le_bytes();
-        block_nonce_bytes[16..].copy_from_slice(&counter_bytes);
-        
+        // 为当前块生成 nonce
+        let block_nonce_bytes: [u8; 24] = get_block_nonce_bytes(file_xnonce_bytes, block_counter);
         let block_nonce = XNonce::from_slice(&block_nonce_bytes);
         
         // 解密当前块
-        let mut decrypted_block = match cipher.decrypt(block_nonce, encrypted_block.as_slice()) {
-            Ok(block) => block,
+        let decrypted_block: Zeroizing<Vec<u8>> = match cipher.decrypt(block_nonce, encrypted_block.as_slice()) {
+            Ok(block) => Zeroizing::new(block),
             Err(_) => {
-                // 安全擦除敏感数据
-                encrypted_block.zeroize();
-                block_nonce_bytes.zeroize();
-                xnonce_bytes.zeroize();
-                subkey.zeroize();
-
                 return Ok(98);// 不能绝对确定加密文件不完整，有可能是密钥输入有误或计算错误
             }
         };
@@ -489,58 +474,47 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &Key) -> Result<i32>
         // 更新验证哈希
         verify_hasher.update(&decrypted_block);
 
-        // 安全擦除敏感数据 (注意subkey, xnonce_bytes下一轮要用, 不能清)
-        encrypted_block.zeroize();
-        block_nonce_bytes.zeroize();
-        decrypted_block.zeroize();
-
         block_counter += 1;
     }
     
-    // 读取存储的哈希 (32字节)
-    let mut stored_hash = [0u8; 32];
-    if let Err(e) = reader.read_exact(&mut stored_hash)
+    // 读取存储的哈希 (48字节)
+    let mut stored_encrypted_hash_bytes: Zeroizing<[u8; 48]> = Zeroizing::new([0u8; 48]);
+    if let Err(e) = reader.read_exact(stored_encrypted_hash_bytes.as_mut())
         // .with_context(|| format!("Failed to read hash from encrypted file: {}", path.display()))
     {
-        // 安全擦除敏感数据
-        stored_hash.zeroize();
-        xnonce_bytes.zeroize();
-        subkey.zeroize();
         match e.kind() {
             std::io::ErrorKind::UnexpectedEof => {return Ok(99);}
             _ => {return Err(anyhow!("Failed to read hash from encrypted file: {}", path.display()));}           
         }
     };
     
-    // 安全擦除敏感数据
-    xnonce_bytes.zeroize();
-    subkey.zeroize();
-
-    let computed_hash = verify_hasher.finalize();
+    let computed_hash:Zeroizing<[u8;32]> = Zeroizing::new(verify_hasher.finalize_reset().into());
     
-    if computed_hash.as_slice() != stored_hash {
-        // 安全擦除敏感数据
-        stored_hash.zeroize();
+    // 解密存储的哈希
+    let decrypted_stored_hash: Zeroizing<[u8; 32]> = match decrypt_file_hash(stored_encrypted_hash_bytes.as_ref(), &subkey, hash_xnonce_bytes) {
+        Ok(hash) => hash,
+        Err(_) => {return Ok(98);}
+    };
+    
+
+    if computed_hash != decrypted_stored_hash {
         return Ok(98);// 不能绝对确定加密文件不完整，有可能是密钥输入有误或计算错误
     }
-
-    // 安全擦除存储的哈希
-    stored_hash.zeroize();
     
     Ok(0)
 }
 
 /// 验证解密文件完整性
-fn verify_decrypted_file(dec_path: &Path, enc_path: &Path) -> Result<i32> {
+fn verify_decrypted_file(dec_path: &Path, enc_path: &Path, master_key: &[u8;32]) -> Result<i32> {
     // 检查中断标志
     if crate::cli::is_interrupted() {
-        println!("Interrupt signal received, skipping verification of {}", dec_path.display());
+        my_println!("Interrupt signal received, skipping verification of {}", dec_path.display());
         return Ok(1);
     }
     
     // 检查解密文件是否可访问
     if let Err(_e) = fs::OpenOptions::new().read(true).write(true).open(dec_path) {
-        eprintln!("Warning: Decrypted file {} cannot be opened (file open exception).", dec_path.display());
+        my_eprintln!("Warning: Decrypted file {} cannot be opened (file open exception).", dec_path.display());
         return Ok(2); // 返回特殊代码表示文件打开异常
     }
    
@@ -552,11 +526,12 @@ fn verify_decrypted_file(dec_path: &Path, enc_path: &Path) -> Result<i32> {
 
     // 检查加密文件是否可访问
     if let Err(_e) = fs::OpenOptions::new().read(true).write(true).open(enc_path) {
-        eprintln!("Warning: Encrypted file {} cannot be opened (file open exception).", enc_path.display());
+        my_eprintln!("Warning: Encrypted file {} cannot be opened (file open exception).", enc_path.display());
         return Ok(2); // 返回特殊代码表示文件打开异常
     }
 
-    let mut stored_src_hash_bytes = get_src_hash_bytes_from_enc_file(enc_path)
+    // 加密文件完整性已验证，直接返回err, 而不是98
+    let decrypted_stored_src_hash_bytes: Zeroizing<[u8; 32]> = get_decrypted_src_hash_bytes_from_enc_file(enc_path, master_key)
         .with_context(|| format!("Failed to get src_hash_bytes from enc_file: {}", enc_path.display()))?;
 
     // 从文件分块读取计算哈希
@@ -566,20 +541,15 @@ fn verify_decrypted_file(dec_path: &Path, enc_path: &Path) -> Result<i32> {
     {
         Ok(file) => file,
         Err(e) => {
-            // 安全擦除敏感数据
-            stored_src_hash_bytes.zeroize();
             return Err(e);
         }
     };
     
-    let mut buffer = vec![0u8; 65536]; // 64KB 缓冲区
+    let mut buffer: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; 65536]); // 64KB 缓冲区
     loop {
         // 检查中断标志
         if crate::cli::is_interrupted() {
-            println!("Interrupt signal received, stopping hash verification of {}", dec_path.display());
-            // 安全擦除敏感数据
-            buffer.zeroize();
-            stored_src_hash_bytes.zeroize();
+            my_println!("Interrupt signal received, stopping hash verification of {}", dec_path.display());
             return Ok(1); // 返回成功，表示已停止处理
         }
         
@@ -588,9 +558,6 @@ fn verify_decrypted_file(dec_path: &Path, enc_path: &Path) -> Result<i32> {
         {
             Ok(bytes) => bytes,
             Err(e) => {
-                // 安全擦除敏感数据
-                buffer.zeroize();
-                stored_src_hash_bytes.zeroize();
                 return Err(e);
             }
         };
@@ -602,53 +569,61 @@ fn verify_decrypted_file(dec_path: &Path, enc_path: &Path) -> Result<i32> {
         hasher.update(&buffer[..bytes_read]);
     }
     
-    // 安全擦除缓冲区
-    buffer.zeroize();
     
     // 计算解密数据的哈希
-    let computed_hash = hasher.finalize();
+    let computed_hash:Zeroizing<[u8;32]> = Zeroizing::new(hasher.finalize_reset().into());
     
     // 验证哈希
-    if computed_hash.as_slice() != stored_src_hash_bytes {
-        // 安全擦除敏感数据
-        stored_src_hash_bytes.zeroize();
+    if computed_hash != decrypted_stored_src_hash_bytes {
         return Ok(98);// 有可能是计算错误，注意只有加密文件验证正确时才有效，否则stored_src_hash_bytes没有意义
     }
-    
-    // 安全擦除存储的哈希
-    stored_src_hash_bytes.zeroize();
 
     Ok(0)
 }
 
-
-fn get_src_hash_bytes_from_enc_file(enc_path: &Path) -> Result<[u8;32]> {
+fn get_decrypted_src_hash_bytes_from_enc_file(enc_path: &Path, master_key: &[u8;32]) -> Result<Zeroizing<[u8;32]>> {
     use std::fs::File;
     use std::io::{Read, Seek, SeekFrom};
+    use std::io::BufReader;
 
-    let mut file = File::open(enc_path)?;
+    let file = File::open(enc_path)?;
+    let mut reader = BufReader::new(file);
+    
+    // 读取前48字节作为 all_xnonce（24字节文件nonce + 24字节哈希nonce）
+    let mut all_xnonce_bytes = [0u8; 48];
+    if let Err(e) = reader.read_exact(&mut all_xnonce_bytes) {
+        return Err(e).with_context(|| format!("Failed to read all_xnonce from encrypted file: {}", enc_path.display()));
+    };
+    
+    // 拆分all_xnonce为文件nonce和哈希nonce
+    let (_, hash_xnonce_bytes) = all_xnonce_bytes.split_at(24);
 
-    // 移动到文件末尾前 32 字节
-    file.seek(SeekFrom::End(-32))?;
+    // 使用主密钥和all_xnonce作为盐派生子密钥（与加密保持一致）
+    let subkey: Zeroizing<[u8; 32]> = derive_subkey_simple(master_key, &all_xnonce_bytes)?;
 
-    let mut hash_bytes = [0u8; 32];
-    file.read_exact(&mut hash_bytes)?;
+    // 移动到文件末尾前 48 字节
+    reader.seek(SeekFrom::End(-48))?;
 
-    Ok(hash_bytes)
+    let mut encrypted_hash_bytes: Zeroizing<[u8; 48]> = Zeroizing::new([0u8; 48]);
+    reader.read_exact(encrypted_hash_bytes.as_mut())?;
+    
+    // 解密存储的哈希
+    let decrypted_stored_hash: Zeroizing<[u8; 32]> = decrypt_file_hash(encrypted_hash_bytes.as_ref(), &subkey, hash_xnonce_bytes)?;
 
+    Ok(decrypted_stored_hash)
 }
 
 /// 验证解密文件完整性, 简易版
 fn verify_decrypted_file_simple(dec_path: &Path) -> Result<i32> {
     // 检查中断标志
     if crate::cli::is_interrupted() {
-        println!("Interrupt signal received, skipping verification of {}", dec_path.display());
+        my_println!("Interrupt signal received, skipping verification of {}", dec_path.display());
         return Ok(1);
     }
     
     // 检查解密文件是否可访问
     if let Err(_e) = fs::OpenOptions::new().read(true).write(true).open(dec_path) {
-        eprintln!("Warning: Decrypted file {} cannot be opened (file open exception).", dec_path.display());
+        my_eprintln!("Warning: Decrypted file {} cannot be opened (file open exception).", dec_path.display());
         return Ok(2); // 返回特殊代码表示文件打开异常
     }
    

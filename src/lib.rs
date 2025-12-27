@@ -5,6 +5,8 @@ pub mod encrypt;
 pub mod fix;
 pub mod key_management;
 pub mod utils;
+pub mod hash;
+pub mod stdout_lock;
 
 // 重新导出常用的类型和函数，方便外部使用
 pub use cli::*;
@@ -13,6 +15,8 @@ pub use encrypt::*;
 pub use fix::*;
 pub use key_management::*;
 pub use utils::*;
+pub use hash::*;
+pub use stdout_lock::*;
 
 // 如果需要，可以在这里定义一些公共的类型别名或常量
 pub const STREAMING_THRESHOLD: u64 = 10 * 1024 * 1024; // 10MB，超过这个大小使用流式加密
