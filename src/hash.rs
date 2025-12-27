@@ -3,9 +3,12 @@ use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{Key, XChaCha20Poly1305};
 use zeroize::Zeroizing;
 
+use crate::*;
+
 /// 加密文件哈希
 /// 输入：原始哈希（32字节）、子密钥（32字节）、xnonce（24字节）
 /// 输出：加密后的哈希（32字节密文 + 16字节认证标签 = 48字节）
+/// 会用子密钥与xnonce在派生一次hash子密钥
 pub fn encrypt_file_hash(original_hash: &[u8; 32], subkey: &[u8; 32], xnonce_bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     use chacha20poly1305::XNonce;
     
@@ -13,8 +16,10 @@ pub fn encrypt_file_hash(original_hash: &[u8; 32], subkey: &[u8; 32], xnonce_byt
     if xnonce_bytes.len() != 24 {
         return Err(anyhow!("Invalid hash xnonce length: expected 24 bytes, got {} bytes", xnonce_bytes.len()));
     }
+
+    let hash_subkey: Zeroizing<[u8; 32]> = derive_subkey_simple(subkey, xnonce_bytes)?;
     // 创建密码器
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(subkey));
+    let cipher = XChaCha20Poly1305::new(Key::from_slice(hash_subkey.as_ref()));
     let xnonce = XNonce::from_slice(xnonce_bytes);
     
     // 加密哈希
@@ -36,6 +41,7 @@ pub fn encrypt_file_hash(original_hash: &[u8; 32], subkey: &[u8; 32], xnonce_byt
 /// 解密文件哈希
 /// 输入：加密后的哈希（48字节）、子密钥（32字节）、xnonce（24字节）
 /// 输出：原始哈希（32字节）
+/// 会用子密钥与xnonce在派生一次hash子密钥
 pub fn decrypt_file_hash(encrypted_hash: &[u8], subkey: &[u8; 32], xnonce_bytes: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
     use chacha20poly1305::XNonce;
     
@@ -49,8 +55,9 @@ pub fn decrypt_file_hash(encrypted_hash: &[u8], subkey: &[u8; 32], xnonce_bytes:
         return Err(anyhow!("Invalid hash xnonce length: expected 24 bytes, got {} bytes", xnonce_bytes.len()));
     }
     
+    let hash_subkey: Zeroizing<[u8; 32]> = derive_subkey_simple(subkey, xnonce_bytes)?;
     // 创建密码器
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(subkey));
+    let cipher = XChaCha20Poly1305::new(Key::from_slice(hash_subkey.as_ref()));
     let xnonce = XNonce::from_slice(xnonce_bytes);
     
     // 解密哈希

@@ -428,6 +428,7 @@ checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
 dependencies = [
  "typenum",
  "version_check",
+ "zeroize",
 ]
 
 [[package]]
@@ -548,7 +549,7 @@ dependencies = [
 
 [[package]]
 name = "kitty_enc"
-version = "0.4.4-debug"
+version = "0.4.5-debug"
 dependencies = [
  "anyhow",
  "argon2",
@@ -557,6 +558,7 @@ dependencies = [
  "clap",
  "ctrlc",
  "dialoguer",
+ "generic-array",
  "hmac",
  "ignore",
  "lazy_static",

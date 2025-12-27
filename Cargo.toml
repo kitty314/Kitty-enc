@@ -1,6 +1,6 @@
 [package]
 name = "kitty_enc"
-version = "0.4.4-debug"
+version = "0.4.5-debug"
 edition = "2024"
 
 [dependencies]
@@ -19,6 +19,7 @@ ignore = "0.4.25"
 hmac = "0.12"
 ctrlc = "3.5.1"
 lazy_static = "1.5.0"
+generic-array = { version = "0.14.7", features = ["zeroize"] }
 
 [profile.release]
 panic = "abort"
