@@ -1,25 +1,24 @@
 [package]
 name = "kitty_enc"
-version = "0.4.5-debug"
+version = "0.4.6-final"
 edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
 clap = { version = "4.5.53", features = ["derive"] }
 walkdir = "2.5.0"
-rand = "0.9.2"
-sha2 = "0.10.9"
-chacha20poly1305 = "0.10.1"
+rand = "0.9.2" # 似乎可信任
+sha2 = "0.10.9" # 不可信任
+chacha20poly1305 = "0.10.1" # 主体可信任，依赖未审察
 chrono = "0.4.42"
-argon2 = { version = "0.5.3", features = ["zeroize"] }
+argon2 = { version = "0.5.3", features = ["zeroize"] } # 依赖不可信任
 zeroize = "1.8.2"
-dialoguer = { version = "0.12", features = ["password"] }
+dialoguer = { version = "0.12", features = ["password"] } # 2025.12.29 已审查
 rayon = "1.11.0"  # 添加 rayon 用于并行处理
 ignore = "0.4.25"
-hmac = "0.12"
 ctrlc = "3.5.1"
 lazy_static = "1.5.0"
-generic-array = { version = "0.14.7", features = ["zeroize"] }
+generic-array = { version = "0.14.7", features = ["zeroize"] } # 需要替换
 
 [profile.release]
 panic = "abort"

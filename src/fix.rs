@@ -368,7 +368,8 @@ fn verify_regular_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<i3
     // 验证解密后的数据哈希是否匹配
     let mut hasher_verify = Sha256::new();
     hasher_verify.update(&pt);
-    let decrypted_hash:Zeroizing<[u8;32]> = Zeroizing::new(hasher_verify.finalize_reset().into());
+    let mut decrypted_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
+    hasher_verify.finalize_into_reset(decrypted_hash.as_mut().into());
     
     // 解密存储的哈希
     let decrypted_stored_hash: Zeroizing<[u8; 32]> = match decrypt_file_hash(stored_encrypted_hash_bytes, &subkey, hash_xnonce_bytes) {
@@ -488,7 +489,8 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<
         }
     };
     
-    let computed_hash:Zeroizing<[u8;32]> = Zeroizing::new(verify_hasher.finalize_reset().into());
+    let mut computed_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
+    verify_hasher.finalize_into_reset(computed_hash.as_mut().into());
     
     // 解密存储的哈希
     let decrypted_stored_hash: Zeroizing<[u8; 32]> = match decrypt_file_hash(stored_encrypted_hash_bytes.as_ref(), &subkey, hash_xnonce_bytes) {
@@ -571,7 +573,8 @@ fn verify_decrypted_file(dec_path: &Path, enc_path: &Path, master_key: &[u8;32])
     
     
     // 计算解密数据的哈希
-    let computed_hash:Zeroizing<[u8;32]> = Zeroizing::new(hasher.finalize_reset().into());
+    let mut computed_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
+    hasher.finalize_into_reset(computed_hash.as_mut().into());
     
     // 验证哈希
     if computed_hash != decrypted_stored_src_hash_bytes {

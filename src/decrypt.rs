@@ -286,7 +286,8 @@ fn decrypt_file_verify(out_path: &Path, decrypted_stored_hash_bytes: Zeroizing<[
     
     let mut hasher_verify = Sha256::new();
     hasher_verify.update(&decrypted_data);
-    let final_hash:Zeroizing<[u8;32]> = Zeroizing::new(hasher_verify.finalize_reset().into());
+    let mut final_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
+    hasher_verify.finalize_into_reset(final_hash.as_mut().into());
     
     if final_hash != decrypted_stored_hash_bytes {
         return Err(anyhow!("Final integrity check failed for decrypted file: {}", out_path.display()));
@@ -506,7 +507,8 @@ fn decrypt_file_streaming_verify(out_path: &Path, decrypted_stored_hash_bytes: Z
     
     
     // 计算解密数据的哈希
-    let computed_hash:Zeroizing<[u8;32]> = Zeroizing::new(verify_hasher.finalize_reset().into());
+    let mut computed_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
+    verify_hasher.finalize_into_reset(computed_hash.as_mut().into());
     
     // 验证哈希
     if computed_hash != decrypted_stored_hash_bytes {

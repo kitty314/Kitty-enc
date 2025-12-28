@@ -474,15 +474,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
-name = "hmac"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
-dependencies = [
- "digest",
-]
-
-[[package]]
 name = "iana-time-zone"
 version = "0.1.64"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -549,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "kitty_enc"
-version = "0.4.5-debug"
+version = "0.4.6-final"
 dependencies = [
  "anyhow",
  "argon2",
@@ -559,7 +550,6 @@ dependencies = [
  "ctrlc",
  "dialoguer",
  "generic-array",
- "hmac",
  "ignore",
  "lazy_static",
  "rand",
