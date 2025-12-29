@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce, aead::{KeyInit, Aead}};
-use std::{fs::{self, File}, io::Read};
+use std::{fs::{self, File}, io::{Read, Seek, SeekFrom}};
 use std::path::{Path, PathBuf};
 use sha2::{Sha256, Digest};
 use ignore::WalkBuilder;
@@ -387,8 +387,6 @@ fn verify_regular_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<i3
 
 /// 验证流式加密文件
 fn verify_streaming_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
-    use std::io::{BufReader, Read};
-    
     // 检查加密文件是否可访问
     if let Err(_e) = fs::OpenOptions::new().read(true).write(true).open(path) {
         my_eprintln!("Warning: Encrypted file {} cannot be opened (file open exception).", path.display());
@@ -396,13 +394,12 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<
     }
 
     // 打开加密文件
-    let encrypted_file = File::open(path)
+    let mut encrypted_file = File::open(path)
         .with_context(|| format!("Failed to open file for streaming decryption: {}", path.display()))?;
-    let mut reader = BufReader::new(encrypted_file);
     
     // 读取前48字节作为 all_xnonce（24字节文件nonce + 24字节哈希nonce）
     let mut all_xnonce_bytes = [0u8; 48];
-    if let Err(e) = reader.read_exact(&mut all_xnonce_bytes) {
+    if let Err(e) = encrypted_file.read_exact(&mut all_xnonce_bytes) {
         return Err(e).with_context(|| format!("Failed to read all_xnonce from encrypted file: {}", path.display()));
     };
     
@@ -428,7 +425,7 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<
         
         // 读取块大小 (4字节)
         let mut block_size_bytes = [0u8; 4];
-        if let Err(e) = reader.read_exact(&mut block_size_bytes)
+        if let Err(e) = encrypted_file.read_exact(&mut block_size_bytes)
             // .with_context(|| format!("Failed to read block size from encrypted file: {}", path.display()))
         {
             match e.kind() {
@@ -451,7 +448,7 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<
         
         // 读取加密块
         let mut encrypted_block: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; block_size]);
-        if let Err(e) = reader.read_exact(&mut encrypted_block)
+        if let Err(e) = encrypted_file.read_exact(&mut encrypted_block)
             // .with_context(|| format!("Failed to read encrypted block {} from file: {}", block_counter, path.display()))
         {
             match e.kind() {
@@ -480,7 +477,7 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<
     
     // 读取存储的哈希 (48字节)
     let mut stored_encrypted_hash_bytes: Zeroizing<[u8; 48]> = Zeroizing::new([0u8; 48]);
-    if let Err(e) = reader.read_exact(stored_encrypted_hash_bytes.as_mut())
+    if let Err(e) = encrypted_file.read_exact(stored_encrypted_hash_bytes.as_mut())
         // .with_context(|| format!("Failed to read hash from encrypted file: {}", path.display()))
     {
         match e.kind() {
@@ -585,16 +582,11 @@ fn verify_decrypted_file(dec_path: &Path, enc_path: &Path, master_key: &[u8;32])
 }
 
 fn get_decrypted_src_hash_bytes_from_enc_file(enc_path: &Path, master_key: &[u8;32]) -> Result<Zeroizing<[u8;32]>> {
-    use std::fs::File;
-    use std::io::{Read, Seek, SeekFrom};
-    use std::io::BufReader;
-
-    let file = File::open(enc_path)?;
-    let mut reader = BufReader::new(file);
+    let mut file = File::open(enc_path)?;
     
     // 读取前48字节作为 all_xnonce（24字节文件nonce + 24字节哈希nonce）
     let mut all_xnonce_bytes = [0u8; 48];
-    if let Err(e) = reader.read_exact(&mut all_xnonce_bytes) {
+    if let Err(e) = file.read_exact(&mut all_xnonce_bytes) {
         return Err(e).with_context(|| format!("Failed to read all_xnonce from encrypted file: {}", enc_path.display()));
     };
     
@@ -605,10 +597,10 @@ fn get_decrypted_src_hash_bytes_from_enc_file(enc_path: &Path, master_key: &[u8;
     let subkey: Zeroizing<[u8; 32]> = derive_subkey_simple(master_key, &all_xnonce_bytes)?;
 
     // 移动到文件末尾前 48 字节
-    reader.seek(SeekFrom::End(-48))?;
+    file.seek(SeekFrom::End(-48))?;
 
     let mut encrypted_hash_bytes: Zeroizing<[u8; 48]> = Zeroizing::new([0u8; 48]);
-    reader.read_exact(encrypted_hash_bytes.as_mut())?;
+    file.read_exact(encrypted_hash_bytes.as_mut())?;
     
     // 解密存储的哈希
     let decrypted_stored_hash: Zeroizing<[u8; 32]> = decrypt_file_hash(encrypted_hash_bytes.as_ref(), &subkey, hash_xnonce_bytes)?;

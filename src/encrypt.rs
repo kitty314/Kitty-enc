@@ -4,7 +4,7 @@ use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use rand::rngs::OsRng;
 use rand::TryRngCore;
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Write, Read};
 use std::path::{Path, PathBuf};
 use sha2::{Sha256, Digest};
 use zeroize::Zeroizing;
@@ -163,8 +163,6 @@ pub fn process_encrypt_dir(dir: &Path, master_key: &[u8;32], key_path_opt: Optio
 }
 
 fn encrypt_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
-    use std::fs::File;
-    use std::io::{Write, BufWriter};
     // 检查中断标志
     if crate::cli::is_interrupted() {
         my_println!("Interrupt signal received, skipping encryption of {}", path.display());
@@ -241,19 +239,19 @@ fn encrypt_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     };
 
     // Output: [xnonce (48 bytes) || 4 bytes 0 (普通加密标记) || ciphertext || encrypted_original_hash(48 bytes)]
-    let mut writer = BufWriter::new(File::create(&out_path)?);
+    let mut out_file = File::create(&out_path)?;
 
     // 写入数据，逐段写入，避免中间 Vec
     if let Err(e) = (|| -> Result<()> {
-        writer.write_all(&all_xnonce_bytes)
+        out_file.write_all(&all_xnonce_bytes)
             .with_context(|| "Failed to write nonce")?;
-        writer.write_all(&[0u8; 4])
+        out_file.write_all(&[0u8; 4])
             .with_context(|| "Failed to write encryption marker")?;
-        writer.write_all(&ct)
+        out_file.write_all(&ct)
             .with_context(|| "Failed to write ciphertext")?;
-        writer.write_all(&encrypted_original_hash)
+        out_file.write_all(&encrypted_original_hash)
             .with_context(|| "Failed to write encrypted hash")?;
-        writer.flush()
+        out_file.flush()
             .with_context(|| "Failed to flush buffer")?;
         Ok(())
     })() {
@@ -349,8 +347,6 @@ fn encrypt_file_verify(out_path: &Path, master_key: &[u8;32]) -> Result<i32> {
     
 /// 流式加密大文件（使用 XChaCha20Poly1305）
 fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
-    use std::io::{BufReader, BufWriter, Write, Read};
-    
     // 检查文件是否可访问
     if let Err(_e) = fs::OpenOptions::new().read(true).write(true).open(path) {
         my_eprintln!("Warning: File {} cannot be opened (file open exception).", path.display());
@@ -374,14 +370,12 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     }
 
     // 打开源文件
-    let source_file = File::open(path)
+    let mut source_file = File::open(path)
         .with_context(|| format!("Failed to open file for streaming encryption: {}", path.display()))?;
-    let mut reader = BufReader::new(source_file);
       
     // 创建输出文件
-    let out_file = File::create(&out_path)
+    let mut out_file = File::create(&out_path)
         .with_context(|| format!("Failed to create encrypted file: {}", out_path.display()))?;
-    let mut writer = BufWriter::new(out_file);
 
     // 生成 48 字节的扩展 nonce
     let mut all_xnonce_bytes = [0u8; 48];
@@ -404,7 +398,7 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     let cipher = XChaCha20Poly1305::new(Key::from_slice(subkey.as_ref()));
     
     // 先写入 nonce
-    if let Err(e) = writer.write_all(&all_xnonce_bytes) {
+    if let Err(e) = out_file.write_all(&all_xnonce_bytes) {
         fs::remove_file(&out_path).ok();
         return Err(e).with_context(|| format!("Failed to write nonce to encrypted file: {}", out_path.display()));
     }
@@ -426,7 +420,7 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
             return Ok(1); // 返回成功，表示已停止处理
         }
         
-        let bytes_read = match reader.read(&mut buffer) {
+        let bytes_read = match source_file.read(&mut buffer) {
             Ok(bytes) => bytes,
             Err(e) => {
                 // 清理已创建的加密文件
@@ -456,13 +450,13 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         
         // 写入加密块大小（4字节）和加密块数据
         let ct_len = ct.len() as u32;
-        if let Err(e) = writer.write_all(&ct_len.to_le_bytes()) {
+        if let Err(e) = out_file.write_all(&ct_len.to_le_bytes()) {
             // 清理已创建的加密文件
             fs::remove_file(&out_path).ok();
             return Err(e).with_context(|| format!("Failed to write block size to file: {}", out_path.display()));
         }
         
-        if let Err(e) = writer.write_all(&ct) {
+        if let Err(e) = out_file.write_all(&ct) {
             // 清理已创建的加密文件
             fs::remove_file(&out_path).ok();
             return Err(e).with_context(|| format!("Failed to write encrypted block to file: {}", out_path.display()));
@@ -483,21 +477,21 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     
     // 写入结束标记：4字节0表示下一个块大小为0
     let end_marker: u32 = 0;
-    if let Err(e) = writer.write_all(&end_marker.to_le_bytes()) {
+    if let Err(e) = out_file.write_all(&end_marker.to_le_bytes()) {
         // 清理已创建的加密文件
         fs::remove_file(&out_path).ok();
         return Err(e).with_context(|| format!("Failed to write end marker to encrypted file: {}", out_path.display()));
     }
     
     // 写入哈希
-    if let Err(e) = writer.write_all(encrypted_original_hash.as_ref()) {
+    if let Err(e) = out_file.write_all(encrypted_original_hash.as_ref()) {
         // 清理已创建的加密文件
         fs::remove_file(&out_path).ok();
         return Err(e).with_context(|| format!("Failed to write hash to encrypted file: {}", out_path.display()));
     }
     
     // 确保所有数据都写入磁盘
-    if let Err(e) = writer.flush() {
+    if let Err(e) = out_file.flush() {
         // 清理已创建的加密文件
         fs::remove_file(&out_path).ok();
         return Err(e).with_context(|| format!("Failed to flush encrypted file: {}", out_path.display()));
@@ -523,24 +517,22 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
 }
 
 fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;32]) -> Result<i32> {
-    use std::io::{BufReader, Read};
     // 验证加密文件
     if let Err(e) = verify_file_not_empty(&out_path) {
         return Err(e);
     }
     
     // 流式验证加密文件
-    let verify_file = match File::open(&out_path) {
+    let mut verify_file = match File::open(&out_path) {
         Ok(file) => file,
         Err(e) => {
             return Err(e).with_context(|| format!("Failed to open encrypted file for verification: {}", out_path.display()));
         }
     };
-    let mut verify_reader = BufReader::new(verify_file);
     
     // 读取 nonce (48字节)
     let mut all_xnonce_bytes_verify = [0u8; 48];
-    if let Err(e) = verify_reader.read_exact(&mut all_xnonce_bytes_verify) {
+    if let Err(e) = verify_file.read_exact(&mut all_xnonce_bytes_verify) {
         return Err(e).with_context(|| format!("Failed to read nonce from encrypted file: {}", out_path.display()));
     }
     // 拆分nonce
@@ -563,7 +555,7 @@ fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;32]) -> Resul
         
         // 读取块大小 (4字节)
         let mut block_size_bytes = [0u8; 4];
-        if let Err(e) = verify_reader.read_exact(&mut block_size_bytes) {
+        if let Err(e) = verify_file.read_exact(&mut block_size_bytes) {
             return Err(e).with_context(|| format!("Failed to read block size from encrypted file: {}", out_path.display()));
         }
         
@@ -578,7 +570,7 @@ fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;32]) -> Resul
         
         // 读取加密块
         let mut encrypted_block: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; block_size]);
-        if let Err(e) = verify_reader.read_exact(&mut encrypted_block) {
+        if let Err(e) = verify_file.read_exact(&mut encrypted_block) {
             return Err(e).with_context(|| format!("Failed to read encrypted block {} from file: {}", verify_block_counter, out_path.display()));
         }
         
@@ -601,7 +593,7 @@ fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;32]) -> Resul
     
     // 读取并验证哈希 (48字节)
     let mut stored_encrypted_hash: Zeroizing<[u8; 48]> = Zeroizing::new([0u8; 48]);
-    if let Err(e) = verify_reader.read_exact(stored_encrypted_hash.as_mut()) {
+    if let Err(e) = verify_file.read_exact(stored_encrypted_hash.as_mut()) {
         return Err(e).with_context(|| format!("Failed to read hash from encrypted file: {}", out_path.display()));
     }
     

@@ -3,7 +3,7 @@ use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 // use walkdir::WalkDir;
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use sha2::{Sha256, Digest};
 use zeroize::Zeroizing;
@@ -296,9 +296,7 @@ fn decrypt_file_verify(out_path: &Path, decrypted_stored_hash_bytes: Zeroizing<[
 }
 
 /// 流式解密大文件（使用 XChaCha20Poly1305）
-fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
-    use std::io::{BufReader, BufWriter, Write, Read};
-    
+fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {  
     // 检查中断标志
     if crate::cli::is_interrupted() {
         my_println!("Interrupt signal received, skipping decryption of {}", path.display());
@@ -332,13 +330,12 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     }
 
     // 打开加密文件
-    let encrypted_file = File::open(path)
+    let mut encrypted_file = File::open(path)
         .with_context(|| format!("Failed to open file for streaming decryption: {}", path.display()))?;
-    let mut reader = BufReader::new(encrypted_file);
     
     // 读取前48字节作为 all_xnonce（24字节文件nonce + 24字节哈希nonce）
     let mut all_xnonce_bytes = [0u8; 48];
-    if let Err(e) = reader.read_exact(&mut all_xnonce_bytes) {
+    if let Err(e) = encrypted_file.read_exact(&mut all_xnonce_bytes) {
         return Err(e).with_context(|| format!("Failed to read all_xnonce from encrypted file: {}", path.display()));
     };
     
@@ -346,9 +343,8 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     let (file_xnonce_bytes, hash_xnonce_bytes) = all_xnonce_bytes.split_at(24);
     
     // 创建输出文件
-    let out_file = File::create(&out_path)
+    let mut out_file = File::create(&out_path)
         .with_context(|| format!("Failed to create decrypted file: {}", out_path.display()))?;
-    let mut writer = BufWriter::new(out_file);
     
     // 使用主密钥和all_xnonce作为盐派生子密钥（与加密保持一致）
     let subkey: Zeroizing<[u8; 32]> = derive_subkey_simple(master_key, &all_xnonce_bytes)
@@ -373,7 +369,7 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         
         // 读取块大小 (4字节)
         let mut block_size_bytes = [0u8; 4];
-        if let Err(e) = reader.read_exact(&mut block_size_bytes) {
+        if let Err(e) = encrypted_file.read_exact(&mut block_size_bytes) {
             // 清理可能已经创建的解密文件
             fs::remove_file(&out_path).ok();
             return Err(e).with_context(|| format!("Failed to read block size from encrypted file: {}", path.display()));
@@ -394,7 +390,7 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         
         // 读取加密块
         let mut encrypted_block: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; block_size]);
-        if let Err(e) = reader.read_exact(&mut encrypted_block) {
+        if let Err(e) = encrypted_file.read_exact(&mut encrypted_block) {
             // 清理可能已经创建的解密文件
             fs::remove_file(&out_path).ok();
             return Err(e).with_context(|| format!("Failed to read encrypted block {} from file: {}", block_counter, path.display()));
@@ -413,7 +409,7 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
             })?);
         
         // 写入解密块
-        if let Err(e) = writer.write_all(&decrypted_block) {
+        if let Err(e) = out_file.write_all(&decrypted_block) {
             // 清理无效的解密文件
             fs::remove_file(&out_path).ok();
             return Err(e).with_context(|| format!("Failed to write decrypted block to file: {}", out_path.display()));
@@ -423,7 +419,7 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     }
     
     // 确保所有数据都写入磁盘
-    if let Err(e) = writer.flush() {
+    if let Err(e) = out_file.flush() {
         // 清理无效的解密文件
         fs::remove_file(&out_path).ok();
         return Err(e).with_context(|| format!("Failed to flush decrypted file: {}", out_path.display()));
@@ -431,7 +427,7 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     
     // 读取存储的加密哈希 (48字节)
     let mut stored_encrypted_hash: Zeroizing<[u8; 48]> = Zeroizing::new([0u8; 48]);
-    if let Err(e) = reader.read_exact(stored_encrypted_hash.as_mut()) {
+    if let Err(e) = encrypted_file.read_exact(stored_encrypted_hash.as_mut()) {
         // 清理可能已经创建的解密文件
         fs::remove_file(&out_path).ok();
         return Err(e).with_context(|| format!("Failed to read hash from encrypted file: {}", path.display()));
@@ -466,21 +462,19 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
 
 /// 流式解密验证函数
 fn decrypt_file_streaming_verify(out_path: &Path, decrypted_stored_hash_bytes: Zeroizing<[u8; 32]>) -> Result<i32> {
-    use std::io::{BufReader, Read};
-    
     // 验证加密文件
     if let Err(e) = verify_file_not_empty(&out_path) {
         return Err(e);
     }
     
     // 流式验证加密文件
-    let verify_file = match File::open(&out_path) {
+    let mut verify_file = match File::open(&out_path) {
         Ok(file) => file,
         Err(e) => {
             return Err(e).with_context(|| format!("Failed to open encrypted file for verification: {}", out_path.display()));
         }
     };
-    let mut verify_reader = BufReader::new(verify_file);
+
     let mut verify_hasher = Sha256::new();
     
     let mut buffer: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; 65536]); // 64KB 缓冲区
@@ -491,7 +485,7 @@ fn decrypt_file_streaming_verify(out_path: &Path, decrypted_stored_hash_bytes: Z
             return Ok(1); // 返回成功，表示已停止处理
         }
         
-        let bytes_read = match verify_reader.read(&mut buffer)
+        let bytes_read = match verify_file.read(&mut buffer)
             .with_context(|| format!("Failed to read decrypted file for hash verification: {}", out_path.display()))
         {
             Ok(bytes) => bytes,
