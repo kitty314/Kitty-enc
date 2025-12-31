@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, anyhow};
-use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce, aead::{KeyInit, Aead}};
 use std::{fs::{self, File}, io::{Read, Seek, SeekFrom}};
 use std::path::{Path, PathBuf};
-use sha2::{Sha256, Digest};
+use crate::MySha256 as Sha256;
+use crate::MySha256Key as Key;
 use ignore::WalkBuilder;
 use ignore::DirEntry as ignore_DirEntry;
 use zeroize::Zeroizing;
@@ -352,24 +352,24 @@ fn verify_regular_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<i3
 
     // 拆分all_xnonce为文件nonce和哈希nonce
     let (file_xnonce_bytes, hash_xnonce_bytes) = all_xnonce_bytes.split_at(24);
-    let file_xnonce = XNonce::from_slice(file_xnonce_bytes);
+    let file_xnonce = MyXnonce::try_from_slice(file_xnonce_bytes)?;
     
     // 使用主密钥和nonce作为盐派生子密钥
     let subkey: Zeroizing<[u8; 32]> = derive_subkey_simple(master_key, all_xnonce_bytes)?;
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(subkey.as_ref()));
+    let cipher = MyCipher::new(subkey.as_ref())?;
     
-    let pt: Zeroizing<Vec<u8>> = match cipher.decrypt(file_xnonce, ct) {
-        Ok(pt) => Zeroizing::new(pt),
+    let pt: Zeroizing<Vec<u8>> = match cipher.decrypt(&file_xnonce, ct) {
+        Ok(pt) => pt,
         Err(_) => {
             return Ok(98);
         }
     };
 
     // 验证解密后的数据哈希是否匹配
-    let mut hasher_verify = Sha256::new();
-    hasher_verify.update(&pt);
+    let mut hasher_verify = Sha256::new(&Key::from_bytes(subkey.as_ref())?)?;
+    hasher_verify.update(&pt)?;
     let mut decrypted_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
-    hasher_verify.finalize_into_reset(decrypted_hash.as_mut().into());
+    hasher_verify.finalize_into(decrypted_hash.as_mut().into())?;
     
     // 解密存储的哈希
     let decrypted_stored_hash: Zeroizing<[u8; 32]> = match decrypt_file_hash(stored_encrypted_hash_bytes, &subkey, hash_xnonce_bytes) {
@@ -410,10 +410,10 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<
     let subkey: Zeroizing<[u8; 32]> = derive_subkey_simple(master_key, &all_xnonce_bytes)?;
     
     // 使用 XChaCha20Poly1305 进行流式解密
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(subkey.as_ref()));
+    let cipher = MyCipher::new(subkey.as_ref())?;
     
     let mut block_counter: u64 = 0;
-    let mut verify_hasher = Sha256::new();
+    let mut verify_hasher = Sha256::new(&Key::from_bytes(subkey.as_ref())?)?;
 
     // 流式读取、解密、写入（不计算哈希）
     loop {
@@ -458,19 +458,19 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<
         }
         
         // 为当前块生成 nonce
-        let block_nonce_bytes: [u8; 24] = get_block_nonce_bytes(file_xnonce_bytes, block_counter);
-        let block_nonce = XNonce::from_slice(&block_nonce_bytes);
+        let block_nonce_bytes: [u8; 24] = get_block_nonce_bytes(file_xnonce_bytes, block_counter)?;
+        let block_nonce = MyXnonce::try_from_slice(&block_nonce_bytes)?;
         
         // 解密当前块
-        let decrypted_block: Zeroizing<Vec<u8>> = match cipher.decrypt(block_nonce, encrypted_block.as_slice()) {
-            Ok(block) => Zeroizing::new(block),
+        let decrypted_block: Zeroizing<Vec<u8>> = match cipher.decrypt(&block_nonce, encrypted_block.as_slice()) {
+            Ok(block) => block,
             Err(_) => {
                 return Ok(98);// 不能绝对确定加密文件不完整，有可能是密钥输入有误或计算错误
             }
         };
 
         // 更新验证哈希
-        verify_hasher.update(&decrypted_block);
+        verify_hasher.update(&decrypted_block)?;
 
         block_counter += 1;
     }
@@ -487,7 +487,7 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<
     };
     
     let mut computed_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
-    verify_hasher.finalize_into_reset(computed_hash.as_mut().into());
+    verify_hasher.finalize_into(computed_hash.as_mut().into())?;
     
     // 解密存储的哈希
     let decrypted_stored_hash: Zeroizing<[u8; 32]> = match decrypt_file_hash(stored_encrypted_hash_bytes.as_ref(), &subkey, hash_xnonce_bytes) {
@@ -530,11 +530,11 @@ fn verify_decrypted_file(dec_path: &Path, enc_path: &Path, master_key: &[u8;32])
     }
 
     // 加密文件完整性已验证，直接返回err, 而不是98
-    let decrypted_stored_src_hash_bytes: Zeroizing<[u8; 32]> = get_decrypted_src_hash_bytes_from_enc_file(enc_path, master_key)
+    let (decrypted_stored_src_hash_bytes,subkey) = get_decrypted_src_hash_bytes_and_subkey_from_enc_file(enc_path, master_key)
         .with_context(|| format!("Failed to get src_hash_bytes from enc_file: {}", enc_path.display()))?;
 
     // 从文件分块读取计算哈希
-    let mut hasher = Sha256::new();
+    let mut hasher = Sha256::new(&Key::from_bytes(subkey.as_ref())?)?;
     let mut file_for_hash = match File::open(dec_path)
         .with_context(|| format!("Failed to open decrypted file for hash verification: {}", dec_path.display()))
     {
@@ -565,13 +565,13 @@ fn verify_decrypted_file(dec_path: &Path, enc_path: &Path, master_key: &[u8;32])
             break;
         }
         
-        hasher.update(&buffer[..bytes_read]);
+        hasher.update(&buffer[..bytes_read])?;
     }
     
     
     // 计算解密数据的哈希
     let mut computed_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
-    hasher.finalize_into_reset(computed_hash.as_mut().into());
+    hasher.finalize_into(computed_hash.as_mut().into())?;
     
     // 验证哈希
     if computed_hash != decrypted_stored_src_hash_bytes {
@@ -581,7 +581,7 @@ fn verify_decrypted_file(dec_path: &Path, enc_path: &Path, master_key: &[u8;32])
     Ok(0)
 }
 
-fn get_decrypted_src_hash_bytes_from_enc_file(enc_path: &Path, master_key: &[u8;32]) -> Result<Zeroizing<[u8;32]>> {
+fn get_decrypted_src_hash_bytes_and_subkey_from_enc_file(enc_path: &Path, master_key: &[u8;32]) -> Result<(Zeroizing<[u8;32]>,Zeroizing<[u8;32]>)> {
     let mut file = File::open(enc_path)?;
     
     // 读取前48字节作为 all_xnonce（24字节文件nonce + 24字节哈希nonce）
@@ -605,7 +605,7 @@ fn get_decrypted_src_hash_bytes_from_enc_file(enc_path: &Path, master_key: &[u8;
     // 解密存储的哈希
     let decrypted_stored_hash: Zeroizing<[u8; 32]> = decrypt_file_hash(encrypted_hash_bytes.as_ref(), &subkey, hash_xnonce_bytes)?;
 
-    Ok(decrypted_stored_hash)
+    Ok((decrypted_stored_hash,subkey))
 }
 
 /// 验证解密文件完整性, 简易版

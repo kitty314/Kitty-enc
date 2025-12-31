@@ -1,11 +1,10 @@
 use anyhow::{Context, Result, anyhow};
-use chacha20poly1305::aead::{Aead, KeyInit};
-use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 // use walkdir::WalkDir;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use sha2::{Sha256, Digest};
+use crate::MySha256 as Sha256;
+use crate::MySha256Key as Key;
 use zeroize::Zeroizing;
 use rayon::prelude::*;  // 添加 rayon 并行处理
 use ignore::WalkBuilder;
@@ -226,14 +225,14 @@ fn decrypt_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     
     // 拆分all_xnonce为文件nonce和哈希nonce
     let (file_xnonce_bytes, hash_xnonce_bytes) = all_xnonce_bytes.split_at(24);
-    let file_xnonce = XNonce::from_slice(file_xnonce_bytes);
+    let file_xnonce = MyXnonce::try_from_slice(file_xnonce_bytes)?;
     
     // 使用主密钥和all_xnonce作为盐派生子密钥（与加密保持一致）
     let subkey: Zeroizing<[u8; 32]> = derive_subkey_simple(master_key, all_xnonce_bytes)?;
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(subkey.as_ref()));
+    let cipher = MyCipher::new(subkey.as_ref())?;
     
-    let pt: Zeroizing<Vec<u8>> = match cipher.decrypt(file_xnonce, ct) {
-        Ok(pt) => Zeroizing::new(pt),
+    let pt: Zeroizing<Vec<u8>> = match cipher.decrypt(&file_xnonce, ct) {
+        Ok(pt) => pt,
         Err(_) => {
             return Err(anyhow!("Decryption failed for {} (bad key or corrupted file)", path.display()));
         }
@@ -251,7 +250,7 @@ fn decrypt_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         return Err(e);
     };
 
-    match decrypt_file_verify(&out_path, decrypted_stored_hash){
+    match decrypt_file_verify(&out_path, decrypted_stored_hash, &subkey){
         Ok(0) => {}
         other => {
             fs::remove_file(&out_path).ok();
@@ -270,7 +269,7 @@ fn decrypt_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     Ok(0)
 }
 
-fn decrypt_file_verify(out_path: &Path, decrypted_stored_hash_bytes: Zeroizing<[u8; 32]>) -> Result<i32>{
+fn decrypt_file_verify(out_path: &Path, decrypted_stored_hash_bytes: Zeroizing<[u8; 32]>, subkey: &[u8;32]) -> Result<i32>{
     // 验证解密文件是否写入成功
     if let Err(e) = verify_file_not_empty(&out_path) {
         return Err(e);
@@ -284,10 +283,10 @@ fn decrypt_file_verify(out_path: &Path, decrypted_stored_hash_bytes: Zeroizing<[
         }
     };
     
-    let mut hasher_verify = Sha256::new();
-    hasher_verify.update(&decrypted_data);
+    let mut hasher_verify = Sha256::new(&Key::from_bytes(subkey)?)?;
+    hasher_verify.update(&decrypted_data)?;
     let mut final_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
-    hasher_verify.finalize_into_reset(final_hash.as_mut().into());
+    hasher_verify.finalize_into(final_hash.as_mut().into())?;
     
     if final_hash != decrypted_stored_hash_bytes {
         return Err(anyhow!("Final integrity check failed for decrypted file: {}", out_path.display()));
@@ -354,7 +353,7 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         })?;
     
     // 使用 XChaCha20Poly1305 进行流式解密
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(subkey.as_ref()));
+    let cipher = MyCipher::new(subkey.as_ref())?;
     
     let mut block_counter: u64 = 0;
     
@@ -397,16 +396,16 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         }
         
         // 为每个块生成唯一的 nonce
-        let block_nonce_bytes: [u8; 24] = get_block_nonce_bytes(file_xnonce_bytes, block_counter);
-        let block_nonce = XNonce::from_slice(&block_nonce_bytes);
+        let block_nonce_bytes: [u8; 24] = get_block_nonce_bytes(file_xnonce_bytes, block_counter)?;
+        let block_nonce = MyXnonce::try_from_slice(&block_nonce_bytes)?;
         
         // 解密当前块
-        let decrypted_block: Zeroizing<Vec<u8>> = Zeroizing::new(cipher.decrypt(block_nonce, encrypted_block.as_slice())
+        let decrypted_block: Zeroizing<Vec<u8>> = cipher.decrypt(&block_nonce, encrypted_block.as_slice())
             .map_err(|_| {
                 // 清理无效的解密文件
                 fs::remove_file(&out_path).ok();
                 anyhow!("Decryption failed for block {} in file: {}", block_counter, path.display())
-            })?);
+            })?;
         
         // 写入解密块
         if let Err(e) = out_file.write_all(&decrypted_block) {
@@ -441,7 +440,7 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         })?;
     
     // 调用验证函数进行验证
-    match decrypt_file_streaming_verify(&out_path, decrypted_stored_hash) {
+    match decrypt_file_streaming_verify(&out_path, decrypted_stored_hash, &subkey) {
         Ok(0) => {}
         other => {
             fs::remove_file(&out_path).ok();
@@ -461,7 +460,7 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
 }
 
 /// 流式解密验证函数
-fn decrypt_file_streaming_verify(out_path: &Path, decrypted_stored_hash_bytes: Zeroizing<[u8; 32]>) -> Result<i32> {
+fn decrypt_file_streaming_verify(out_path: &Path, decrypted_stored_hash_bytes: Zeroizing<[u8; 32]>, subkey: &[u8;32]) -> Result<i32> {
     // 验证加密文件
     if let Err(e) = verify_file_not_empty(&out_path) {
         return Err(e);
@@ -475,7 +474,7 @@ fn decrypt_file_streaming_verify(out_path: &Path, decrypted_stored_hash_bytes: Z
         }
     };
 
-    let mut verify_hasher = Sha256::new();
+    let mut verify_hasher = Sha256::new(&Key::from_bytes(subkey)?)?;
     
     let mut buffer: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; 65536]); // 64KB 缓冲区
     loop {
@@ -496,13 +495,13 @@ fn decrypt_file_streaming_verify(out_path: &Path, decrypted_stored_hash_bytes: Z
             break;
         }
         
-        verify_hasher.update(&buffer[..bytes_read]);
+        verify_hasher.update(&buffer[..bytes_read])?;
     }
     
     
     // 计算解密数据的哈希
     let mut computed_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
-    verify_hasher.finalize_into_reset(computed_hash.as_mut().into());
+    verify_hasher.finalize_into(computed_hash.as_mut().into())?;
     
     // 验证哈希
     if computed_hash != decrypted_stored_hash_bytes {

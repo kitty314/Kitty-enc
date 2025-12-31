@@ -3,6 +3,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use zeroize::Zeroizing;
+use libsodium_rs::utils::{mlock, munlock};
 
 use crate::*;
 
@@ -71,8 +72,14 @@ pub const AFTER_HELP: &str = "
   - 使用强密码短语以增强安全性
   - 密码短语和密钥文件应分开保管
   - 纯密码模式下，请使用强密码并确保密码安全
-  - 任意文件模式下，确保使用的文件内容稳定不变，否则无法解密";
+  - 任意文件模式下，确保使用的文件内容稳定不变，否则无法解密
 
+关于内存清理: 
+  - 绝大多数涉及隐私信息的内存在程序正常结束时都会被清理
+  - 对于运行敏感应用程序的系统，应完全禁用休眠功能
+  - 在 Unix 系统中，当在开发环境之外运行加密代码时，也应该禁用核心转储
+  - 由于许多系统对进程可锁定的内存量有限制, 本程序预计会取消对内存锁定的支持, 用户有责任保护内存不被交换到磁盘
+  - 如果冷启动攻击或静态数据保护是您的威胁模型中严重的问题，那么最有效的防御措施是加密整个磁盘卷并加密交换分区（或完全禁用交换分区）";
 
 #[derive(Parser, Debug)]
 #[command(
@@ -170,8 +177,10 @@ pub fn handle_cli(mut cli: Cli) -> Result<()> {
         // No subcommand, no -s/-d: auto encrypt current dir, generate key if none
         (None, None, None, None, key_opt, None, false) => {
             let (key_path,passphrase_opt) = get_or_create_key_path(&run_dir, key_opt, "current")?;
-            let key: Zeroizing<[u8; 32]> = load_key(&key_path,passphrase_opt)?;
+            let mut key: Zeroizing<[u8; 32]> = load_key(&key_path,passphrase_opt)?;
+            mlock(key.as_mut()).context("锁定主密钥失败")?;
             process_encrypt_dir(&run_dir, &key, Some(&key_path), &exe_path)?;
+            munlock(key.as_mut()).context("解锁主密钥失败")?;
             my_println!("Encryption completed for {}", run_dir.display());
             Ok(())
         }
@@ -180,8 +189,10 @@ pub fn handle_cli(mut cli: Cli) -> Result<()> {
         (Some(Mode::Encrypt { src_dir: Some(src_dir), key_file: key_opt }), None, None, None, None, None,false) 
         | (None, Some(src_dir), None, None, key_opt, None, false) => {
             let (key_path,passphrase_opt) = get_or_create_key_path(src_dir, key_opt, "source")?;
-            let key: Zeroizing<[u8; 32]> = load_key(&key_path,passphrase_opt)?;
+            let mut key: Zeroizing<[u8; 32]> = load_key(&key_path,passphrase_opt)?;
+            mlock(key.as_mut()).context("锁定主密钥失败")?;
             process_encrypt_dir(src_dir, &key, Some(&key_path), &exe_path)?;
+            munlock(key.as_mut()).context("解锁主密钥失败")?;
             my_println!("Encryption completed for {}", src_dir.display());
             Ok(())
         }
@@ -190,8 +201,10 @@ pub fn handle_cli(mut cli: Cli) -> Result<()> {
         (Some(Mode::Decrypt { dec_dir: Some(dec_dir), key_file: key_opt }), None, None, None, None, None,false) 
         | (None, None, Some(dec_dir), None, key_opt, None, false) => {
             let (key_path,passphrase_opt) = get_or_create_key_path(dec_dir, key_opt, "decryption")?;
-            let key: Zeroizing<[u8; 32]> = load_key(&key_path,passphrase_opt)?;
+            let mut key: Zeroizing<[u8; 32]> = load_key(&key_path,passphrase_opt)?;
+            mlock(key.as_mut()).context("锁定主密钥失败")?;
             process_decrypt_dir(dec_dir, &key, &exe_path, Some(&key_path))?;
+            munlock(key.as_mut()).context("解锁主密钥失败")?;
             my_println!("Decryption completed for {}", dec_dir.display());
             Ok(())
         }
@@ -199,8 +212,10 @@ pub fn handle_cli(mut cli: Cli) -> Result<()> {
         // Fix mode: -f dir (key optional -> search in fix directory)
         (None, None, None, Some(fix_dir), key_opt, None, false) => {
             let (key_path,passphrase_opt) = get_or_create_key_path(fix_dir, key_opt, "fix")?;
-            let key: Zeroizing<[u8; 32]> = load_key(&key_path,passphrase_opt)?;
+            let mut key: Zeroizing<[u8; 32]> = load_key(&key_path,passphrase_opt)?;
+            mlock(key.as_mut()).context("锁定主密钥失败")?;
             process_fix_dir(fix_dir, &key, &exe_path, Some(&key_path))?;
+            munlock(key.as_mut()).context("解锁主密钥失败")?;
             my_println!("Fix completed for {}", fix_dir.display());
             Ok(())
         }
@@ -208,8 +223,10 @@ pub fn handle_cli(mut cli: Cli) -> Result<()> {
         // 任意文件模式：加密当前目录
         (None, None, None, None, None, Some(any_file), &passwd_only) => {
             let need_confirm = passwd_only; // 加密时需要确认密码
-            let key: Zeroizing<[u8; 32]> = derive_key_from_any_file(any_file, passwd_only, need_confirm)?;
+            let mut key: Zeroizing<[u8; 32]> = derive_key_from_any_file(any_file, passwd_only, need_confirm)?;
+            mlock(key.as_mut()).context("锁定主密钥失败")?;
             process_encrypt_dir(&run_dir, &key, Some(any_file), &exe_path)?;
+            munlock(key.as_mut()).context("解锁主密钥失败")?;
             let mode_str = if passwd_only { "any-file mode with password" } else { "any-file mode, no password" };
             my_println!("Encryption completed for {} ({})", run_dir.display(), mode_str);
             Ok(())
@@ -218,8 +235,10 @@ pub fn handle_cli(mut cli: Cli) -> Result<()> {
         // 任意文件模式：加密指定目录
         (None, Some(src_dir), None, None, None, Some(any_file), &passwd_only) => {
             let need_confirm = passwd_only; // 加密时需要确认密码
-            let key: Zeroizing<[u8; 32]> = derive_key_from_any_file(any_file, passwd_only, need_confirm)?;
+            let mut key: Zeroizing<[u8; 32]> = derive_key_from_any_file(any_file, passwd_only, need_confirm)?;
+            mlock(key.as_mut()).context("锁定主密钥失败")?;
             process_encrypt_dir(src_dir, &key, Some(any_file), &exe_path)?;
+            munlock(key.as_mut()).context("解锁主密钥失败")?;
             let mode_str = if passwd_only { "any-file mode with password" } else { "any-file mode, no password" };
             my_println!("Encryption completed for {} ({})", src_dir.display(), mode_str);
             Ok(())
@@ -228,8 +247,10 @@ pub fn handle_cli(mut cli: Cli) -> Result<()> {
         // 任意文件模式：解密指定目录
         (None, None, Some(dec_dir), None, None, Some(any_file), &passwd_only) => {
             let need_confirm = false; // 解密时不需要确认密码
-            let key: Zeroizing<[u8; 32]> = derive_key_from_any_file(any_file, passwd_only, need_confirm)?;
+            let mut key: Zeroizing<[u8; 32]> = derive_key_from_any_file(any_file, passwd_only, need_confirm)?;
+            mlock(key.as_mut()).context("锁定主密钥失败")?;
             process_decrypt_dir(dec_dir, &key, &exe_path, Some(any_file))?;
+            munlock(key.as_mut()).context("解锁主密钥失败")?;
             let mode_str = if passwd_only { "any-file mode with password" } else { "any-file mode, no password" };
             my_println!("Decryption completed for {} ({})", dec_dir.display(), mode_str);
             Ok(())
@@ -238,8 +259,10 @@ pub fn handle_cli(mut cli: Cli) -> Result<()> {
         // 任意文件模式：修复指定目录
         (None, None, None, Some(fix_dir), None, Some(any_file), &passwd_only) => {
             let need_confirm = false; // 修复时不需要确认密码
-            let key: Zeroizing<[u8; 32]> = derive_key_from_any_file(any_file, passwd_only, need_confirm)?;
+            let mut key: Zeroizing<[u8; 32]> = derive_key_from_any_file(any_file, passwd_only, need_confirm)?;
+            mlock(key.as_mut()).context("锁定主密钥失败")?;
             process_fix_dir(fix_dir, &key, &exe_path, Some(any_file))?;
+            munlock(key.as_mut()).context("解锁主密钥失败")?;
             let mode_str = if passwd_only { "any-file mode with password" } else { "any-file mode, no password" };
             my_println!("Fix completed for {} ({})", fix_dir.display(), mode_str);
             Ok(())
@@ -248,8 +271,10 @@ pub fn handle_cli(mut cli: Cli) -> Result<()> {
         // 纯密码模式：加密当前目录
         (None, None, None, None, None, None, true) => {
             let passwd: Zeroizing<String> = read_passwd_interactive()?;
-            let key: Zeroizing<[u8; 32]> = derive_key_from_password(passwd)?;
+            let mut key: Zeroizing<[u8; 32]> = derive_key_from_password(passwd)?;
+            mlock(key.as_mut()).context("锁定主密钥失败")?;
             process_encrypt_dir(&run_dir, &key, None, &exe_path)?;
+            munlock(key.as_mut()).context("解锁主密钥失败")?;
             my_println!("Encryption completed for {} (password-only mode)", run_dir.display());
             Ok(())
         }
@@ -257,8 +282,10 @@ pub fn handle_cli(mut cli: Cli) -> Result<()> {
         // 纯密码模式：加密指定目录
         (None, Some(src_dir), None, None, None, None, true) => {
             let passwd: Zeroizing<String> = read_passwd_interactive()?;
-            let key: Zeroizing<[u8; 32]> = derive_key_from_password(passwd)?;
+            let mut key: Zeroizing<[u8; 32]> = derive_key_from_password(passwd)?;
+            mlock(key.as_mut()).context("锁定主密钥失败")?;
             process_encrypt_dir(src_dir, &key, None, &exe_path)?;
+            munlock(key.as_mut()).context("解锁主密钥失败")?;
             my_println!("Encryption completed for {} (password-only mode)", src_dir.display());
             Ok(())
         }
@@ -266,8 +293,10 @@ pub fn handle_cli(mut cli: Cli) -> Result<()> {
         // 纯密码模式：解密指定目录
         (None, None, Some(dec_dir), None, None, None, true) => {
             let passwd: Zeroizing<String> = read_passwd_interactive_once()?;
-            let key: Zeroizing<[u8; 32]> = derive_key_from_password(passwd)?;
+            let mut key: Zeroizing<[u8; 32]> = derive_key_from_password(passwd)?;
+            mlock(key.as_mut()).context("锁定主密钥失败")?;
             process_decrypt_dir(dec_dir, &key, &exe_path, None)?;
+            munlock(key.as_mut()).context("解锁主密钥失败")?;
             my_println!("Decryption completed for {} (password-only mode)", dec_dir.display());
             Ok(())
         }
@@ -275,8 +304,10 @@ pub fn handle_cli(mut cli: Cli) -> Result<()> {
         // 纯密码模式：修复指定目录
         (None, None, None, Some(fix_dir), None, None, true) => {
             let passwd: Zeroizing<String> = read_passwd_interactive_once()?;
-            let key: Zeroizing<[u8; 32]> = derive_key_from_password(passwd)?;
+            let mut key: Zeroizing<[u8; 32]> = derive_key_from_password(passwd)?;
+            mlock(key.as_mut()).context("锁定主密钥失败")?;
             process_fix_dir(fix_dir, &key, &exe_path, None)?;
+            munlock(key.as_mut()).context("解锁主密钥失败")?;
             my_println!("Fix completed for {} (password-only mode)", fix_dir.display());
             Ok(())
         }

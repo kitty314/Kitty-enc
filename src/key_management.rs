@@ -1,13 +1,10 @@
 use anyhow::{anyhow, Context, Result};
-use argon2::Argon2;
-use chacha20poly1305::aead::{Aead, KeyInit};
-use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use rand::rngs::OsRng;
 use rand::TryRngCore;
 use std::fs::{self};
 use std::path::{Path, PathBuf};
 use chrono::Local;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::*;
 
@@ -162,34 +159,24 @@ fn encrypt_key_with_passphrase(key: Zeroizing<[u8; 32]>, passphrase: &str) -> Re
     if let Err(e) = OsRng.try_fill_bytes(&mut salt_bytes) {
         return Err(e).context("Failed to generate random salt for key encryption");
     }
-    
-    // 使用 Argon2id 派生密钥加密密钥
-    let argon2 = Argon2::new(
-        argon2::Algorithm::Argon2id,
-        argon2::Version::V0x13,
-        argon2::Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, None)
-            .map_err(|_e| anyhow!("Failed to create Argon2 params for key encryption"))?,
-    );
-    
     // 派生密钥 - 使用 hash_password_into 直接写入可变数组
     let mut key_encryption_key_bytes: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
-    argon2
-        .hash_password_into(passphrase.as_bytes(), &salt_bytes, key_encryption_key_bytes.as_mut())
+    my_argon2_into(passphrase.as_bytes(), &salt_bytes, key_encryption_key_bytes.as_mut())
         .map_err(|_e| anyhow!("Failed to derive key for key encryption"))?;
     
     // 使用 XChaCha20Poly1305 加密密钥
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(key_encryption_key_bytes.as_ref()));
+    let cipher = MyCipher::new(key_encryption_key_bytes.as_ref())?;
     
     // 随机 xnonce
     let mut xnonce_bytes = [0u8; 24];
     if let Err(e) = OsRng.try_fill_bytes(&mut xnonce_bytes) {
         return Err(e).context("Failed to generate random nonce for key encryption");
     }
-    let xnonce = XNonce::from_slice(&xnonce_bytes);
+    let xnonce = MyXnonce::try_from_slice(&xnonce_bytes)?;
     
     // 加密密钥
-    let encrypted_key: Zeroizing<Vec<u8>> = match cipher.encrypt(xnonce, key.as_ref()) {
-        Ok(encrypted) => Zeroizing::new(encrypted),
+    let encrypted_key: Zeroizing<Vec<u8>> = match cipher.encrypt(&xnonce, key.as_ref()) {
+        Ok(encrypted) => encrypted,
         Err(_) => {
             return Err(anyhow!("Failed to encrypt key with passphrase"));
         }
@@ -263,28 +250,19 @@ fn decrypt_key_with_passphrase(encrypted_data: Zeroizing<Vec<u8>>, passphrase: Z
     // 分离 salt、xnonce 和加密的密钥
     let (salt_bytes, rest) = encrypted_data.split_at(SALT_LENGTH);
     let (xnonce_bytes, encrypted_key) = rest.split_at(24);
-    
-    // 使用 Argon2id 派生密钥解密密钥
-    let argon2 = Argon2::new(
-        argon2::Algorithm::Argon2id,
-        argon2::Version::V0x13,
-        argon2::Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, None)
-            .map_err(|_e| anyhow!("Failed to create Argon2 params for key decryption"))?,
-    );
-    
+
     // 派生密钥 - 使用 hash_password_into 直接写入可变数组
     let mut key_encryption_key_bytes: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
-    argon2
-        .hash_password_into(passphrase.as_bytes(), salt_bytes, key_encryption_key_bytes.as_mut())
+    my_argon2_into(passphrase.as_bytes(), salt_bytes, key_encryption_key_bytes.as_mut())
         .map_err(|_e| anyhow!("Failed to derive key for key decryption"))?;
     
     // 使用 XChaCha20Poly1305 解密密钥
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(key_encryption_key_bytes.as_ref()));
-    let xnonce = XNonce::from_slice(xnonce_bytes);
+    let cipher = MyCipher::new(key_encryption_key_bytes.as_ref())?;
+    let xnonce = MyXnonce::try_from_slice(xnonce_bytes)?;
     
     // 解密密钥
-    let decrypted_key: Zeroizing<Vec<u8>> = match cipher.decrypt(xnonce, encrypted_key) {
-        Ok(decrypted) => Zeroizing::new(decrypted),
+    let decrypted_key: Zeroizing<Vec<u8>> = match cipher.decrypt(&xnonce, encrypted_key) {
+        Ok(decrypted) => decrypted,
         Err(_) => {
             return Err(anyhow!("Failed to decrypt key with passphrase"));
         }
@@ -297,297 +275,6 @@ fn decrypt_key_with_passphrase(encrypted_data: Zeroizing<Vec<u8>>, passphrase: Z
     let mut key_bytes: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
     key_bytes.copy_from_slice(&decrypted_key);
     
-    Ok(key_bytes)
-}
-
-/// 安全地读取密码短语（交互式输入，不显示在屏幕上）
-fn read_passphrase_interactive() -> Result<Zeroizing<String>> {
-    // 第一次读取密码
-    let mut passphrase: Zeroizing<String> = match read_password_utf8("Enter passphrase (input will be hidden)") {
-        Ok(p) => p,
-        Err(e) => {
-            // 读取失败，没有密码需要清理
-            return Err(e);
-        }
-    };
-    
-    // 如果第一次输入为空，给第二次确认机会
-    if passphrase.is_empty() {
-        match read_password_utf8("Empty passphrase entered. Press Enter again to confirm no passphrase, or enter a passphrase") {
-            Ok(second_input) => {
-                // 如果第二次输入非空，则使用第二次输入作为密码短语
-                if !second_input.is_empty() {
-                    passphrase = second_input;
-                }
-                // 如果第二次输入也为空，保持 passphrase 为空
-            }
-            Err(e) => {
-                return Err(e);
-            }
-        }
-    }
-    
-    // 如果密码非空，需要确认
-    if !passphrase.is_empty() {
-        // 确认密码短语
-        let confirm: Zeroizing<String> = match read_password_utf8("Confirm passphrase") {
-            Ok(c) => c,
-            Err(e) => {
-                return Err(e);
-            }
-        };
-        
-        if passphrase != confirm {
-            return Err(anyhow::anyhow!("Passphrases do not match"));
-        }
-        
-        // 返回主密码（调用者负责清理）
-        return Ok(passphrase);
-    }
-    
-    // 密码为空，直接返回（空字符串不需要特殊清理）
-    Ok(passphrase)
-}
-
-/// 安全地读取密码短语一次（交互式输入，不显示在屏幕上）
-fn read_passphrase_interactive_once() -> Result<Zeroizing<String>> {
-    let passphrase: Zeroizing<String> = read_password_utf8("Enter passphrase (input will be hidden)")?;
-    Ok(passphrase)
-}
-
-/// 安全地读取密码（交互式输入，不显示在屏幕上），一直读取直到输入非空
-pub fn read_passwd_interactive() -> Result<Zeroizing<String>> {
-    loop {
-        // 读取密码
-        let passwd: Zeroizing<String> = match read_password_utf8("Enter password (input will be hidden)") {
-            Ok(p) => p,
-            Err(e) => {
-                // 读取失败，没有密码需要清理
-                return Err(e);
-            }
-        };
-        
-        // 如果密码为空，提示并重新输入
-        if passwd.is_empty() {
-            my_println!("Password cannot be empty. Please try again.");
-            continue;
-        }
-        
-        // 确认密码
-        let confirm: Zeroizing<String> = match read_password_utf8("Confirm password") {
-            Ok(c) => c,
-            Err(e) => {
-                return Err(e);
-            }
-        };
-        
-        if passwd != confirm {
-            return Err(anyhow::anyhow!("Passphrases do not match"));
-            // my_println!("Passwords do not match. Please try again.");
-            // continue;
-        }
-        
-        // 返回密码（调用者负责清理）
-        return Ok(passwd);
-    }
-}
-
-/// 安全地读取密码一次（交互式输入，不显示在屏幕上）
-pub fn read_passwd_interactive_once() -> Result<Zeroizing<String>> {
-    loop {
-        let passwd: Zeroizing<String> = read_password_utf8("Enter password (input will be hidden)")?;
-        
-        // 如果密码为空，提示并重新输入
-        if passwd.is_empty() {
-            my_println!("Password cannot be empty. Please try again.");
-            continue;
-        }
-        
-        return Ok(passwd);
-    }
-}
-
-/// 读取密码并正确处理 UTF-8 编码（使用 dialoguer 库）
-fn read_password_utf8(prompt:&str) -> Result<Zeroizing<String>> {
-    let result: Zeroizing<String> = Zeroizing::new(dialoguer::Password::new()
-        .with_prompt(prompt)
-        .allow_empty_password(true)
-        .interact()
-        .map_err(|e| anyhow::anyhow!("Failed to read password: {}", e))?);
-        // 检查中断标志
-    if crate::cli::is_interrupted() {
-        let mut passwd: Zeroizing<String> = result;
-        {
-            my_println!("Cleaning up what you've typed...");
-            passwd.zeroize();
-        }
-        my_println!("The program may report some errors, but don't worry.");
-        return Err(anyhow!("User interrupted. Goodbye."));
-    }
-    Ok(result)
-}
-
-/// 简化的密钥派生函数：从主密钥和salt派生子密钥（32字节）
-/// 使用Argon2id：subkey = Argon2id(master_key, salt)
-pub fn derive_subkey_simple(master_key: &[u8; 32], salt: &[u8]) -> Result<Zeroizing<[u8;32]>> {
-    use argon2::{self, Argon2};
-    
-    // 使用 Argon2id 派生密钥
-    let params = match argon2::Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, None) {
-        Ok(params) => params,
-        Err(_) => {
-            return Err(anyhow!("Failed to create Argon2 parameters during subkey derivation"));
-        }
-    };
-    
-    let argon2 = Argon2::new(
-        argon2::Algorithm::Argon2id,
-        argon2::Version::V0x13,
-        params,
-    );
-    
-    // 派生密钥 - 使用 hash_password_into 直接写入可变数组
-    let mut subkey: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
-    if let Err(_) = argon2.hash_password_into(master_key, salt, subkey.as_mut()) {
-        return Err(anyhow!("Failed to derive subkey"));
-    }
-    
-    Ok(subkey)
-}
-
-/// 从密码派生密钥（32字节）
-/// 使用Argon2id密钥派生函数，使用密码作为salt (16字节)，如果密码太短则补0
-pub fn derive_key_from_password(password: Zeroizing<String>) -> Result<Zeroizing<[u8;32]>> {
-    use argon2::{self, Argon2};
-    
-    // 使用 Argon2id 派生密钥
-    let params = match argon2::Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, None) {
-        Ok(params) => params,
-        Err(_e) => {
-            return Err(anyhow!("Failed to create Argon2 parameters for deriving key from password"));
-        }
-    };
-    
-    let argon2 = Argon2::new(
-        argon2::Algorithm::Argon2id,
-        argon2::Version::V0x13,
-        params,
-    );
-    
-    // 使用密码作为salt，如果密码太短则补0到16字节 // 此时盐需要保护
-    let password_bytes = password.as_bytes();
-    let mut salt_bytes: Zeroizing<[u8; 16]> = Zeroizing::new([0u8; SALT_LENGTH]);
-    
-    // 复制密码字节到salt数组，如果密码长度小于16则剩余部分保持为0
-    let copy_len = std::cmp::min(password_bytes.len(), SALT_LENGTH);
-    salt_bytes[..copy_len].copy_from_slice(&password_bytes[..copy_len]);
-    
-    // 派生密钥 - 使用 hash_password_into 直接写入可变数组
-    let mut key_bytes: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
-    if let Err(_e) = argon2.hash_password_into(password_bytes, salt_bytes.as_ref(), key_bytes.as_mut()) {
-        return Err(anyhow!("Failed to derive key from password"));
-    }
-    
-    Ok(key_bytes)
-}
-
-/// 从任意文件派生密钥（32字节）
-/// 使用Argon2id密钥派生函数
-/// 参数：
-/// - file_path: 用于派生密钥的文件路径
-/// - use_password: 是否使用密码
-/// - need_confirm: 密码是否需要确认
-/// 流程：
-/// 1. 检查文件是否存在且大小至少32字节
-/// 2. 读取文件至多前1MB内容作为输入数据
-/// 3. 如果使用密码，根据need_confirm调用相应的密码读取函数
-/// 4. 如果不使用密码，使用文件前16字节作为盐
-/// 5. 使用Argon2id派生密钥
-pub fn derive_key_from_any_file(file_path: &Path, use_password: bool, need_confirm: bool) -> Result<Zeroizing<[u8;32]>> {
-    use argon2::{self, Argon2};
-    
-    // 检查文件是否存在且大小至少32字节 //2025.12.18会追溯软链接，如果链接破损或无权限返回false
-    if !file_path.exists() {
-        return Err(anyhow!("File does not exist: {}", file_path.display()));
-    }
-    // 2025.12.18 Path.is_file()会追溯软链接，如果链接破损或无权限返回false
-    if !file_path.is_file() {
-        return Err(anyhow!("Path is not a file: {}", file_path.display()));
-    }
-    
-    let metadata = fs::metadata(file_path)
-        .with_context(|| format!("Failed to get metadata for file: {}", file_path.display()))?;
-    
-    if metadata.len() < 32 {
-        return Err(anyhow!("File must be at least 32 bytes, but is only {} bytes", metadata.len()));
-    }
-
-    // 配置Argon2
-    let params = match argon2::Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, None) {
-        Ok(params) => params,
-        Err(_e) => {
-            return Err(anyhow!("Failed to create Argon2 params for deriving key from any file"));
-        }
-    };
-    
-    let argon2 = Argon2::new(
-        argon2::Algorithm::Argon2id,
-        argon2::Version::V0x13,
-        params,
-    );
-
-    // 获取密码
-    let password: Zeroizing<String> = if use_password {
-        if need_confirm {
-            read_passwd_interactive()?
-        } else {
-            read_passwd_interactive_once()?
-        }
-    } else {
-        Zeroizing::new(String::new())
-    };
-
-    // 读取文件至多前1MB内容
-    let mut file = match fs::File::open(file_path) {
-        Ok(f) => f,
-        Err(e) => {
-            return Err(e).with_context(|| format!("Failed to open file: {}", file_path.display()));
-        }
-    };
-    
-    // 限制读取大小为1MB
-    let read_size = std::cmp::min(metadata.len(), ANY_FILE_MAX_READ_SIZE as u64) as usize;
-    
-    let mut file_data: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; read_size]);
-    use std::io::Read;
-    if let Err(e) = file.read_exact(&mut file_data) {
-        return Err(e).with_context(|| format!("Failed to read file data: {}", file_path.display()));
-    }
-    
-    
-    // 准备盐：如果不使用密码，使用文件前16字节作为盐；如果使用密码，使用密码派生密钥作为盐
-    let salt: Zeroizing<Vec<u8>>;
-    
-    if use_password {
-        // 使用密码派生密钥作为盐
-        let mut salt_from_passwd: Zeroizing<[u8; 32]> = Zeroizing::new([0u8;32]);
-        if let Err(_e) = argon2.hash_password_into(password.as_bytes(), &file_data, salt_from_passwd.as_mut()) {
-            return Err(anyhow!("Failed to derive salt from password"));
-        }
-        salt = Zeroizing::new(salt_from_passwd.to_vec());
-    } else {
-        // 使用文件前16字节作为盐
-        let copy_len = std::cmp::min(file_data.len(), SALT_LENGTH);
-        salt = Zeroizing::new(file_data[..copy_len].to_vec());
-    }
-    
-    
-    // 派生密钥 - 使用 hash_password_into 直接写入可变数组
-    let mut key_bytes: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
-    if let Err(_e) = argon2.hash_password_into(&file_data, &salt, key_bytes.as_mut()) {
-        return Err(anyhow!("Failed to derive key from any file"));
-    }
-       
     Ok(key_bytes)
 }
 

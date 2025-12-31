@@ -166,7 +166,10 @@ pub fn is_streaming_encrypted_file(path: &Path) -> Result<bool> {
 
 /// 通过把主nonce末8字节和计数器相加得到块nonce
 /// 统一LE编码处理, 溢出还原为0
-pub fn get_block_nonce_bytes(file_xnonce_bytes: &[u8], block_counter: u64) -> [u8;24]{
+pub fn get_block_nonce_bytes(file_xnonce_bytes: &[u8], block_counter: u64) -> Result<[u8;24]>{
+    if file_xnonce_bytes.len() != 24{
+        return Err(anyhow!("计算块nonce失败, 输入的主nonce长度不符"));
+    }
     let mut file_xnonce_bytes_8 = [0u8;8];
     file_xnonce_bytes_8.copy_from_slice(&file_xnonce_bytes[16..]);
     let final_counter = u64::from_le_bytes(file_xnonce_bytes_8).wrapping_add(block_counter);
@@ -177,5 +180,5 @@ pub fn get_block_nonce_bytes(file_xnonce_bytes: &[u8], block_counter: u64) -> [u
     
     // 后 8 字节使用计数器的 LE 编码
     block_nonce_bytes[16..].copy_from_slice(&final_counter_bytes);
-    block_nonce_bytes
+    Ok(block_nonce_bytes)
 }
