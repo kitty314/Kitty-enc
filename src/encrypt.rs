@@ -5,7 +5,6 @@ use std::fs::{self, File};
 use std::io::{Write, Read};
 use std::path::{Path, PathBuf};
 use crate::MySha256 as Sha256;
-use crate::MySha256Key as Key;
 use zeroize::Zeroizing;
 use rayon::prelude::*;  // 添加 rayon 并行处理
 use ignore::WalkBuilder;
@@ -215,10 +214,10 @@ fn encrypt_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
     
     // 计算源文件的 SHA256 哈希用于完整性验证
-    let mut hasher = Sha256::new(&Key::from_bytes(subkey.as_ref())?)?;
-    hasher.update(&data)?;
+    let mut hasher = Sha256::new();
+    hasher.update(&data);
     let mut original_hash: Zeroizing<[u8; 32]> = Zeroizing::new([0u8;32]);
-    hasher.finalize_into(original_hash.as_mut().into())?;// 保护数据2
+    hasher.finalize_into(original_hash.as_mut())?;// 保护数据2
 
     // 加密hash
     let encrypted_original_hash: Zeroizing<Vec<u8>> = match encrypt_file_hash(&original_hash, &subkey, hash_xnonce_bytes) {
@@ -328,11 +327,11 @@ fn encrypt_file_verify(out_path: &Path, master_key: &[u8;32]) -> Result<i32> {
         })?;
 
     // 验证解密后的数据哈希是否匹配
-    let mut hasher_verify = Sha256::new(&Key::from_bytes(subkey_verify.as_ref())?)?;
-    hasher_verify.update(&pt_verify)?;
+    let mut hasher_verify = Sha256::new();
+    hasher_verify.update(&pt_verify);
     // 保护数据
     let mut hash_need_verify:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
-    hasher_verify.finalize_into(hash_need_verify.as_mut().into())?;
+    hasher_verify.finalize_into(hash_need_verify.as_mut())?;
     
     // 解密hash // 保护数据
     let decrypted_stored_hash_bytes: Zeroizing<[u8; 32]> = decrypt_file_hash(stored_encrypted_hash_bytes, &subkey_verify, hash_xnonce_bytes_verify)?;
@@ -404,7 +403,7 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     
     // 缓冲区大小：1MB
     let mut buffer: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; STREAMING_CHUNK_SIZE]);
-    let mut hasher = Sha256::new(&Key::from_bytes(subkey.as_ref())?)?;
+    let mut hasher = Sha256::new();
     
     // 块计数器，用于生成唯一的 nonce
     let mut block_counter: u64 = 0;
@@ -433,7 +432,7 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         }
         
         // 更新哈希
-        hasher.update(&buffer[..bytes_read])?;
+        hasher.update(&buffer[..bytes_read]);
         
         // 为每个块生成唯一的 nonce
         let block_nonce_bytes: [u8; 24] = get_block_nonce_bytes(file_xnonce_bytes, block_counter)?;
@@ -466,7 +465,7 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     
     // 计算最终哈希
     let mut original_hash: Zeroizing<[u8; 32]> = Zeroizing::new([0u8;32]);
-    hasher.finalize_into(original_hash.as_mut().into())?;
+    hasher.finalize_into(original_hash.as_mut())?;
     // 加密hash
     let encrypted_original_hash: Zeroizing<Vec<u8>> = encrypt_file_hash(&original_hash, &subkey, hash_xnonce_bytes)
         .map_err(|e|{
@@ -542,7 +541,7 @@ fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;32]) -> Resul
     let cipher_verify = MyCipher::new(subkey_verify.as_ref())?;
     
     let mut verify_block_counter: u64 = 0;
-    let mut verify_hasher = Sha256::new(&Key::from_bytes(subkey_verify.as_ref())?)?;
+    let mut verify_hasher = Sha256::new();
     
     // 流式读取并验证每个加密块
     loop {
@@ -579,13 +578,13 @@ fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;32]) -> Resul
         let block_nonce = MyXnonce::try_from_slice(&block_nonce_bytes)?;
         
         // 解密当前块
-        let decrypted_block: Zeroizing<Vec<u8>> = cipher_verify.decrypt(&block_nonce, encrypted_block.as_slice())
+        let decrypted_block: Zeroizing<Vec<u8>> = cipher_verify.decrypt(&block_nonce, encrypted_block.as_ref())
             .map_err(|_| {
                 anyhow!("Encryption verification failed for block {}: {}", verify_block_counter, out_path.display())
             })?;
         
         // 更新验证哈希
-        verify_hasher.update(&decrypted_block)?;
+        verify_hasher.update(&decrypted_block);
 
         verify_block_counter += 1;
     }
@@ -597,7 +596,7 @@ fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;32]) -> Resul
     }
     
     let mut computed_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
-    verify_hasher.finalize_into(computed_hash.as_mut().into())?;
+    verify_hasher.finalize_into(computed_hash.as_mut())?;
     
     let decrypted_stored_hash_bytes: Zeroizing<[u8; 32]> = decrypt_file_hash(stored_encrypted_hash.as_ref(), &subkey_verify, hash_xnonce_bytes_verify)?;
     

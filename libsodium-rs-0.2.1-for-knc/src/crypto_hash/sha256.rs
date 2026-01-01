@@ -41,6 +41,8 @@
 
 // No need for Result import since hash functions can't fail
 
+use crate::{Result, SodiumError};
+
 /// Number of bytes in a SHA-256 hash output (32 bytes, 256 bits)
 pub const BYTES: usize = libsodium_sys::crypto_hash_sha256_BYTES as usize;
 
@@ -182,6 +184,20 @@ impl State {
 
         hash
     }
+
+    pub fn finalize_into(&mut self, out: &mut [u8]) -> Result<()> {
+        if out.len() != BYTES {
+            return Err(SodiumError::InvalidInput(format!(
+                "out must be exactly {BYTES} bytes"
+            )));
+        }
+        unsafe {
+            libsodium_sys::crypto_hash_sha256_final(&mut self.state, out.as_mut_ptr());
+        };
+
+        Ok(())
+    }
+
 }
 
 /// Computes a SHA-256 hash of the input data

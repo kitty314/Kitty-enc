@@ -4,7 +4,6 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use crate::MySha256 as Sha256;
-use crate::MySha256Key as Key;
 use zeroize::Zeroizing;
 use rayon::prelude::*;  // 添加 rayon 并行处理
 use ignore::WalkBuilder;
@@ -250,7 +249,7 @@ fn decrypt_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         return Err(e);
     };
 
-    match decrypt_file_verify(&out_path, decrypted_stored_hash, &subkey){
+    match decrypt_file_verify(&out_path, decrypted_stored_hash){
         Ok(0) => {}
         other => {
             fs::remove_file(&out_path).ok();
@@ -269,7 +268,7 @@ fn decrypt_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     Ok(0)
 }
 
-fn decrypt_file_verify(out_path: &Path, decrypted_stored_hash_bytes: Zeroizing<[u8; 32]>, subkey: &[u8;32]) -> Result<i32>{
+fn decrypt_file_verify(out_path: &Path, decrypted_stored_hash_bytes: Zeroizing<[u8; 32]>) -> Result<i32>{
     // 验证解密文件是否写入成功
     if let Err(e) = verify_file_not_empty(&out_path) {
         return Err(e);
@@ -283,10 +282,10 @@ fn decrypt_file_verify(out_path: &Path, decrypted_stored_hash_bytes: Zeroizing<[
         }
     };
     
-    let mut hasher_verify = Sha256::new(&Key::from_bytes(subkey)?)?;
-    hasher_verify.update(&decrypted_data)?;
+    let mut hasher_verify = Sha256::new();
+    hasher_verify.update(&decrypted_data);
     let mut final_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
-    hasher_verify.finalize_into(final_hash.as_mut().into())?;
+    hasher_verify.finalize_into(final_hash.as_mut())?;
     
     if final_hash != decrypted_stored_hash_bytes {
         return Err(anyhow!("Final integrity check failed for decrypted file: {}", out_path.display()));
@@ -400,7 +399,7 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         let block_nonce = MyXnonce::try_from_slice(&block_nonce_bytes)?;
         
         // 解密当前块
-        let decrypted_block: Zeroizing<Vec<u8>> = cipher.decrypt(&block_nonce, encrypted_block.as_slice())
+        let decrypted_block: Zeroizing<Vec<u8>> = cipher.decrypt(&block_nonce, encrypted_block.as_ref())
             .map_err(|_| {
                 // 清理无效的解密文件
                 fs::remove_file(&out_path).ok();
@@ -440,7 +439,7 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         })?;
     
     // 调用验证函数进行验证
-    match decrypt_file_streaming_verify(&out_path, decrypted_stored_hash, &subkey) {
+    match decrypt_file_streaming_verify(&out_path, decrypted_stored_hash) {
         Ok(0) => {}
         other => {
             fs::remove_file(&out_path).ok();
@@ -460,7 +459,7 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
 }
 
 /// 流式解密验证函数
-fn decrypt_file_streaming_verify(out_path: &Path, decrypted_stored_hash_bytes: Zeroizing<[u8; 32]>, subkey: &[u8;32]) -> Result<i32> {
+fn decrypt_file_streaming_verify(out_path: &Path, decrypted_stored_hash_bytes: Zeroizing<[u8; 32]>) -> Result<i32> {
     // 验证加密文件
     if let Err(e) = verify_file_not_empty(&out_path) {
         return Err(e);
@@ -474,7 +473,7 @@ fn decrypt_file_streaming_verify(out_path: &Path, decrypted_stored_hash_bytes: Z
         }
     };
 
-    let mut verify_hasher = Sha256::new(&Key::from_bytes(subkey)?)?;
+    let mut verify_hasher = Sha256::new();
     
     let mut buffer: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; 65536]); // 64KB 缓冲区
     loop {
@@ -495,13 +494,13 @@ fn decrypt_file_streaming_verify(out_path: &Path, decrypted_stored_hash_bytes: Z
             break;
         }
         
-        verify_hasher.update(&buffer[..bytes_read])?;
+        verify_hasher.update(&buffer[..bytes_read]);
     }
     
     
     // 计算解密数据的哈希
     let mut computed_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
-    verify_hasher.finalize_into(computed_hash.as_mut().into())?;
+    verify_hasher.finalize_into(computed_hash.as_mut())?;
     
     // 验证哈希
     if computed_hash != decrypted_stored_hash_bytes {

@@ -19,18 +19,10 @@ pub fn derive_subkey_simple(master_key: &[u8; 32], salt: &[u8]) -> Result<Zeroiz
 
 /// 从密码派生密钥（32字节）
 /// 使用Argon2id密钥派生函数，使用密码作为salt (16字节)，如果密码太短则补0
-pub fn derive_key_from_password(password: Zeroizing<String>) -> Result<Zeroizing<[u8;32]>> {
-    // 使用密码作为salt，如果密码太短则补0到16字节 // 此时盐需要保护
-    let password_bytes = password.as_bytes();
-    let mut salt_bytes: Zeroizing<[u8; 16]> = Zeroizing::new([0u8; SALT_LENGTH]);
-    
-    // 复制密码字节到salt数组，如果密码长度小于16则剩余部分保持为0
-    let copy_len = std::cmp::min(password_bytes.len(), SALT_LENGTH);
-    salt_bytes[..copy_len].copy_from_slice(&password_bytes[..copy_len]);
-    
+pub fn derive_key_from_password(password: Zeroizing<String>) -> Result<Zeroizing<[u8;32]>> {    
     // 派生密钥 - 使用 hash_password_into 直接写入可变数组
     let mut key_bytes: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
-    if let Err(_e) = my_argon2_into(password_bytes, salt_bytes.as_ref(), key_bytes.as_mut()) {
+    if let Err(_e) = my_argon2_into(password.as_ref(), password.as_ref(), key_bytes.as_mut()) {
         return Err(anyhow!("Failed to derive key from password"));
     }
     
@@ -94,27 +86,20 @@ pub fn derive_key_from_any_file(file_path: &Path, use_password: bool, need_confi
         return Err(e).with_context(|| format!("Failed to read file data: {}", file_path.display()));
     }
     
-    
-    // 准备盐：如果不使用密码，使用文件前16字节作为盐；如果使用密码，使用密码派生密钥作为盐
-    let salt: Zeroizing<Vec<u8>>;
-    
+    // 准备盐：如果不使用密码，使用文件前16字节作为盐；如果使用密码，使用密码作为盐
+    let salt: &[u8];
     if use_password {
-        // 使用密码派生密钥作为盐
-        let mut salt_from_passwd: Zeroizing<[u8; 32]> = Zeroizing::new([0u8;32]);
-        if let Err(_e) = my_argon2_into(password.as_bytes(), &file_data, salt_from_passwd.as_mut()) {
-            return Err(anyhow!("Failed to derive salt from password"));
-        }
-        salt = Zeroizing::new(salt_from_passwd.to_vec());
+        salt = password.as_bytes();
     } else {
         // 使用文件前16字节作为盐
         let copy_len = std::cmp::min(file_data.len(), SALT_LENGTH);
-        salt = Zeroizing::new(file_data[..copy_len].to_vec());
+        salt = &file_data[..copy_len];
     }
     
     
     // 派生密钥 - 使用 hash_password_into 直接写入可变数组
     let mut key_bytes: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
-    if let Err(_e) = my_argon2_into(&file_data, &salt, key_bytes.as_mut()) {
+    if let Err(_e) = my_argon2_into(&file_data, salt, key_bytes.as_mut()) {
         return Err(anyhow!("Failed to derive key from any file"));
     }
        
@@ -128,11 +113,15 @@ pub fn my_argon2_into(password:&[u8], salt:&[u8], out:&mut [u8]) -> Result<()> {
     if out.len() != 32{
         return Err(anyhow!("派生密钥失败, 输出缓冲区长度不正确"));
     }
-    let salt: Zeroizing<Vec<u8>> = argon2_input_to_16(salt)?;
+    let salt_16: Zeroizing<Vec<u8>> = argon2_input_to_16(salt)?;
+    let mut pwd_salt_pair: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::new());
+    pwd_salt_pair.extend_from_slice(password);
+    pwd_salt_pair.extend_from_slice(salt);
+    pwd_salt_pair.extend_from_slice(&salt_16);
     let key: Zeroizing<Vec<u8>> = Zeroizing::new(crypto_pwhash::pwhash(
     32,
-    password,
-    &salt,
+    &pwd_salt_pair,
+    &salt_16,
     MY_ARGON2_OPSLIMIT_32,
     MY_ARGON2_MEMLIMIT_32,
     crypto_pwhash::ALG_DEFAULT

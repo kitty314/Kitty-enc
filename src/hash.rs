@@ -70,5 +70,4 @@ pub fn decrypt_file_hash(encrypted_hash: &[u8], subkey: &[u8; 32], xnonce_bytes:
     Ok(hash_array)
 }
 
-pub type MySha256 = libsodium_rs::crypto_auth::hmacsha512256::State;
-pub type MySha256Key = libsodium_rs::crypto_auth::hmacsha512256::Key;
+pub type MySha256 = libsodium_rs::crypto_hash::sha256::State;
