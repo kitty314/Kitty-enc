@@ -195,7 +195,7 @@ fn decrypt_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     out_path.set_extension("");
     
     // 检查解密后的文件是否已经存在，存在则跳过
-    if out_path.exists() {
+    if out_path.try_exists()? {
         my_eprintln!("Warning: Target file {} already exists, you need to fix it", out_path.display());
         return Ok(3); // 返回代码3表示目标文件已存在而跳过
     }
@@ -322,7 +322,7 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     out_path.set_extension("");
 
     // 检查解密后的文件是否已经存在，存在则跳过
-    if out_path.exists() {
+    if out_path.try_exists()? {
         my_eprintln!("Warning: Target file {} already exists, you need to fix it", out_path.display());
         return Ok(3); // 返回代码3表示目标文件已存在而跳过
     }
@@ -526,7 +526,7 @@ fn check_whether_src_file_exist(enc_path: &Path) -> Result<(bool,PathBuf)> {
     out_path.set_extension("");
 
     // 检查解密后的文件是否已经存在，存在则跳过
-    if out_path.exists() {
+    if out_path.try_exists()? {
         return Ok((true,out_path)); // 返回代码3表示目标文件已存在而跳过
     }
     return Ok((false,out_path));

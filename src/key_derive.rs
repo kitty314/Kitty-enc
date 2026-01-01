@@ -42,8 +42,8 @@ pub fn derive_key_from_password(password: Zeroizing<String>) -> Result<Zeroizing
 /// 4. 如果不使用密码，使用文件前16字节作为盐
 /// 5. 使用Argon2id派生密钥
 pub fn derive_key_from_any_file(file_path: &Path, use_password: bool, need_confirm: bool) -> Result<Zeroizing<[u8;32]>> {    
-    // 检查文件是否存在且大小至少32字节 //2025.12.18会追溯软链接，如果链接破损或无权限返回false
-    if !file_path.exists() {
+    // 检查文件是否存在且大小至少32字节 //2025.12.18会追溯软链接 // 2026.1.1如果链接破损返回false或无权限返回err
+    if !file_path.try_exists()? {
         return Err(anyhow!("File does not exist: {}", file_path.display()));
     }
     // 2025.12.18 Path.is_file()会追溯软链接，如果链接破损或无权限返回false

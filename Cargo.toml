@@ -1,6 +1,6 @@
 [package]
 name = "kitty_enc"
-version = "0.5.6-nacl"
+version = "0.5.8-final"
 edition = "2024"
 
 [dependencies]
@@ -15,7 +15,8 @@ rayon = "1.11.0"  # 添加 rayon 用于并行处理
 ignore = "0.4.25"
 ctrlc = "3.5.1"
 lazy_static = "1.5.0"
-libsodium-rs = "0.2.1"
+libsodium-rs = { version = "0.2.1", features = ["optimized", "fetch-latest", "minimal"] }
+
 # argon2 = { version = "0.5.3", features = ["zeroize"] } # 依赖不可信任
 # chacha20poly1305 = "0.10.1" # 主体可信任，依赖未审察
 # sha2 = "0.10.9" # 不可信任

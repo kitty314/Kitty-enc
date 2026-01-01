@@ -185,7 +185,7 @@ fn encrypt_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     };
 
     // 检查加密目标文件是否已经存在，存在则跳过
-    if out_path.exists() {
+    if out_path.try_exists()? {
         my_eprintln!("Warning: Target encrypted file {} already exists, you need to fix it", out_path.display());
         return Ok(3); // 返回代码3表示目标文件已存在而跳过
     }
@@ -362,7 +362,7 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     };
 
     // 检查加密目标文件是否已经存在，存在则跳过
-    if out_path.exists() {
+    if out_path.try_exists()? {
         my_eprintln!("Warning: Target encrypted file {} already exists, you need to fix it", out_path.display());
         return Ok(3); // 返回代码3表示目标文件已存在而跳过
     }

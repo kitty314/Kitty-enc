@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -170,7 +170,7 @@ pub fn handle_cli(mut cli: Cli) -> Result<()> {
     let run_dir = std::env::current_dir().context("Cannot get current working directory")?;
 
     // 将相对路径转换为绝对路径并规范化
-    normalize_cli_paths(&mut cli, &run_dir);
+    normalize_cli_paths(&mut cli, &run_dir)?;
 
     // Determine operation mode
     let result = match (&cli.mode, &cli.src_dir, &cli.dec_dir, &cli.fix_dir, &cli.key_file, &cli.any_file, &cli.passwd) {
@@ -321,37 +321,42 @@ pub fn handle_cli(mut cli: Cli) -> Result<()> {
 }
 
 /// 辅助函数：规范化可选路径
-fn normalize_optional_path(path: &mut Option<PathBuf>, run_dir: &PathBuf) {
+fn normalize_optional_path(path: &mut Option<PathBuf>, run_dir: &PathBuf) -> Result<()> {
     if let Some(path) = path {
         if path.is_relative() {
             *path = run_dir.join(&path);
         }
         // 规范化路径（移除 . 和 ..）
         *path = normalize_path(&path, run_dir);
+        if !path.try_exists()? {
+            return Err(anyhow!("Path does not exist: {}", path.display()));
+        }
     }
+    Ok(())
 }
 
 /// 规范化 CLI 中的所有路径
-fn normalize_cli_paths(cli: &mut Cli, run_dir: &PathBuf) {
+fn normalize_cli_paths(cli: &mut Cli, run_dir: &PathBuf) ->Result<()>{
     // 规范化顶级参数
-    normalize_optional_path(&mut cli.src_dir, run_dir);
-    normalize_optional_path(&mut cli.dec_dir, run_dir);
-    normalize_optional_path(&mut cli.key_file, run_dir);
-    normalize_optional_path(&mut cli.any_file, run_dir);
-    normalize_optional_path(&mut cli.fix_dir, run_dir);
+    normalize_optional_path(&mut cli.src_dir, run_dir)?;
+    normalize_optional_path(&mut cli.dec_dir, run_dir)?;
+    normalize_optional_path(&mut cli.key_file, run_dir)?;
+    normalize_optional_path(&mut cli.any_file, run_dir)?;
+    normalize_optional_path(&mut cli.fix_dir, run_dir)?;
 
     // 规范化子命令参数
     match &mut cli.mode {
         Some(Mode::Encrypt { src_dir, key_file }) => {
-            normalize_optional_path(src_dir, run_dir);
-            normalize_optional_path(key_file, run_dir);
+            normalize_optional_path(src_dir, run_dir)?;
+            normalize_optional_path(key_file, run_dir)?;
         }
         Some(Mode::Decrypt { dec_dir, key_file }) => {
-            normalize_optional_path(dec_dir, run_dir);
-            normalize_optional_path(key_file, run_dir);
+            normalize_optional_path(dec_dir, run_dir)?;
+            normalize_optional_path(key_file, run_dir)?;
         }
         None => {}
     }
+    Ok(())
 }
 
 /// 打印帮助信息

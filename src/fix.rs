@@ -199,7 +199,7 @@ fn collect_files_for_fix(dir: &Path, exe_path: &Path, key_path_opt: Option<&Path
                 src_path.set_extension("");
                 
                 // 检查源文件是否已经存在
-                if src_path.exists() {
+                if src_path.try_exists()? {
                     pairs.push((src_path, path.to_path_buf()));
                 }
             }
