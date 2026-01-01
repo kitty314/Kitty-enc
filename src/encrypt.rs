@@ -214,7 +214,7 @@ fn encrypt_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
     
     // 计算源文件的 SHA256 哈希用于完整性验证
-    let mut hasher = Sha256::new();
+    let mut hasher = Sha256::new(None,32)?;
     hasher.update(&data);
     let mut original_hash: Zeroizing<[u8; 32]> = Zeroizing::new([0u8;32]);
     hasher.finalize_into(original_hash.as_mut())?;// 保护数据2
@@ -327,7 +327,7 @@ fn encrypt_file_verify(out_path: &Path, master_key: &[u8;32]) -> Result<i32> {
         })?;
 
     // 验证解密后的数据哈希是否匹配
-    let mut hasher_verify = Sha256::new();
+    let mut hasher_verify = Sha256::new(None,32)?;
     hasher_verify.update(&pt_verify);
     // 保护数据
     let mut hash_need_verify:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
@@ -403,7 +403,7 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     
     // 缓冲区大小：1MB
     let mut buffer: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; STREAMING_CHUNK_SIZE]);
-    let mut hasher = Sha256::new();
+    let mut hasher = Sha256::new(None,32)?;
     
     // 块计数器，用于生成唯一的 nonce
     let mut block_counter: u64 = 0;
@@ -541,7 +541,7 @@ fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;32]) -> Resul
     let cipher_verify = MyCipher::new(subkey_verify.as_ref())?;
     
     let mut verify_block_counter: u64 = 0;
-    let mut verify_hasher = Sha256::new();
+    let mut verify_hasher = Sha256::new(None,32)?;
     
     // 流式读取并验证每个加密块
     loop {

@@ -321,6 +321,22 @@ impl State {
 
         out
     }
+
+    pub fn finalize_into(&mut self, out: &mut [u8]) -> Result<()> {
+        if out.len() != self.output_len{
+            return Err(SodiumError::InvalidInput(format!(
+                "out must be exactly {} bytes",self.output_len
+            )));
+        }
+        unsafe {
+            libsodium_sys::crypto_generichash_final(
+                &mut self.state,
+                out.as_mut_ptr(),
+                out.len() as libc::size_t,
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Computes a BLAKE2b hash of the input data with an optional key

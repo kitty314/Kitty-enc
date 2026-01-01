@@ -282,7 +282,7 @@ fn decrypt_file_verify(out_path: &Path, decrypted_stored_hash_bytes: Zeroizing<[
         }
     };
     
-    let mut hasher_verify = Sha256::new();
+    let mut hasher_verify = Sha256::new(None,32)?;
     hasher_verify.update(&decrypted_data);
     let mut final_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
     hasher_verify.finalize_into(final_hash.as_mut())?;
@@ -473,7 +473,7 @@ fn decrypt_file_streaming_verify(out_path: &Path, decrypted_stored_hash_bytes: Z
         }
     };
 
-    let mut verify_hasher = Sha256::new();
+    let mut verify_hasher = Sha256::new(None,32)?;
     
     let mut buffer: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; 65536]); // 64KB 缓冲区
     loop {

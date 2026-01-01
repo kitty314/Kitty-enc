@@ -365,7 +365,7 @@ fn verify_regular_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<i3
     };
 
     // 验证解密后的数据哈希是否匹配
-    let mut hasher_verify = Sha256::new();
+    let mut hasher_verify = Sha256::new(None,32)?;
     hasher_verify.update(&pt);
     let mut decrypted_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
     hasher_verify.finalize_into(decrypted_hash.as_mut())?;
@@ -412,7 +412,7 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<
     let cipher = MyCipher::new(subkey.as_ref())?;
     
     let mut block_counter: u64 = 0;
-    let mut verify_hasher = Sha256::new();
+    let mut verify_hasher = Sha256::new(None,32)?;
 
     // 流式读取、解密、写入（不计算哈希）
     loop {
@@ -533,7 +533,7 @@ fn verify_decrypted_file(dec_path: &Path, enc_path: &Path, master_key: &[u8;32])
         .with_context(|| format!("Failed to get src_hash_bytes from enc_file: {}", enc_path.display()))?;
 
     // 从文件分块读取计算哈希
-    let mut hasher = Sha256::new();
+    let mut hasher = Sha256::new(None,32)?;
     let mut file_for_hash = match File::open(dec_path)
         .with_context(|| format!("Failed to open decrypted file for hash verification: {}", dec_path.display()))
     {
