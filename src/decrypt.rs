@@ -358,6 +358,14 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     // 拆分all_xnonce为文件nonce和哈希nonce
     let (file_xnonce_bytes, hash_xnonce_bytes) = all_xnonce_bytes.split_at(24);
     
+    // 使用主密钥和all_xnonce作为盐派生子密钥（与加密保持一致）
+    let subkey: Zeroizing<[u8; 32]> = derive_subkey_simple(master_key, &all_xnonce_bytes)?;
+    
+    // 使用 XChaCha20Poly1305 进行流式解密
+    let cipher = MyCipher::new(subkey.as_ref())?;
+    
+    let mut block_counter: u64 = 0;
+
     // 创建输出文件
     let mut out_file = File::create_new(&out_path)
         .with_context(|| format!("Failed to create decrypted file: {}", out_path.display()))?;
@@ -366,77 +374,64 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         return Err(e).with_context(|| format!("Failed to lock decrypted file: {}", out_path.display()))
     }
 
-    // 使用主密钥和all_xnonce作为盐派生子密钥（与加密保持一致）
-    let subkey: Zeroizing<[u8; 32]> = derive_subkey_simple(master_key, &all_xnonce_bytes)
-        .map_err(|e|{
-            fs::remove_file(&out_path).ok();
-            e
-        })?;
-    
-    // 使用 XChaCha20Poly1305 进行流式解密
-    let cipher = MyCipher::new(subkey.as_ref())?;
-    
-    let mut block_counter: u64 = 0;
-    
     // 流式读取、解密、写入并计算哈希
-    loop {
-        // 检查中断标志
-        if crate::cli::is_interrupted() {
-            my_println!("Interrupt signal received, stopping decryption of {}", path.display());
-            fs::remove_file(&out_path).ok();
-            return Ok(1); // 返回成功，表示已停止处理
+    let loop_result= (||-> Result<i32> {
+        loop {
+            // 检查中断标志
+            if crate::cli::is_interrupted() {
+                my_println!("Interrupt signal received, stopping decryption of {}", path.display());
+                return Ok(1); // 返回成功，表示已停止处理
+            }
+            
+            // 读取块大小 (4字节)
+            let mut block_size_bytes = [0u8; 4];
+            if let Err(e) = encrypted_file.read_exact(&mut block_size_bytes) {
+                return Err(e).with_context(|| format!("Failed to read block size from encrypted file: {}", path.display()));
+            }
+            
+            let block_size = u32::from_le_bytes(block_size_bytes);
+            
+            // 如果块大小为0，表示文件结束
+            if block_size == 0 {
+                break;
+            } else if block_size > (STREAMING_CHUNK_SIZE + 16) as u32 {
+                return Err(anyhow!("密文大小不合理"));
+            }
+            
+            let block_size = block_size as usize;
+            
+            // 读取加密块
+            let mut encrypted_block: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; block_size]);
+            if let Err(e) = encrypted_file.read_exact(&mut encrypted_block) {
+                return Err(e).with_context(|| format!("Failed to read encrypted block {} from file: {}", block_counter, path.display()));
+            }
+            
+            // 为每个块生成唯一的 nonce
+            let block_nonce_bytes: [u8; 24] = get_block_nonce_bytes(file_xnonce_bytes, block_counter)?;
+            let block_nonce = MyXnonce::try_from_slice(&block_nonce_bytes)?;
+            
+            // 解密当前块
+            let decrypted_block: Zeroizing<Vec<u8>> = cipher.decrypt(&block_nonce, encrypted_block.as_ref())
+                .map_err(|_| {
+                    anyhow!("Decryption failed for block {} in file: {}", block_counter, path.display())
+                })?;
+            
+            // 写入解密块
+            if let Err(e) = out_file.write_all(&decrypted_block) {
+                return Err(e).with_context(|| format!("Failed to write decrypted block to file: {}", out_path.display()));
+            }
+            
+            block_counter += 1;
         }
-        
-        // 读取块大小 (4字节)
-        let mut block_size_bytes = [0u8; 4];
-        if let Err(e) = encrypted_file.read_exact(&mut block_size_bytes) {
-            // 清理可能已经创建的解密文件
+        Ok(0)
+    })();
+    match loop_result {
+        Ok(0) => {}
+        other => {
             fs::remove_file(&out_path).ok();
-            return Err(e).with_context(|| format!("Failed to read block size from encrypted file: {}", path.display()));
-        }
-        
-        let block_size = u32::from_le_bytes(block_size_bytes);
-        
-        // 如果块大小为0，表示文件结束
-        if block_size == 0 {
-            break;
-        } else if block_size > (STREAMING_CHUNK_SIZE + 16) as u32 {
-            // 块大小理论最大值STREAMING_CHUNK_SIZE + 16
-            fs::remove_file(&out_path).ok();
-            return Err(anyhow!("密文大小不合理"));
-        }
-        
-        let block_size = block_size as usize;
-        
-        // 读取加密块
-        let mut encrypted_block: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; block_size]);
-        if let Err(e) = encrypted_file.read_exact(&mut encrypted_block) {
-            // 清理可能已经创建的解密文件
-            fs::remove_file(&out_path).ok();
-            return Err(e).with_context(|| format!("Failed to read encrypted block {} from file: {}", block_counter, path.display()));
-        }
-        
-        // 为每个块生成唯一的 nonce
-        let block_nonce_bytes: [u8; 24] = get_block_nonce_bytes(file_xnonce_bytes, block_counter)?;
-        let block_nonce = MyXnonce::try_from_slice(&block_nonce_bytes)?;
-        
-        // 解密当前块
-        let decrypted_block: Zeroizing<Vec<u8>> = cipher.decrypt(&block_nonce, encrypted_block.as_ref())
-            .map_err(|_| {
-                // 清理无效的解密文件
-                fs::remove_file(&out_path).ok();
-                anyhow!("Decryption failed for block {} in file: {}", block_counter, path.display())
-            })?;
-        
-        // 写入解密块
-        if let Err(e) = out_file.write_all(&decrypted_block) {
-            // 清理无效的解密文件
-            fs::remove_file(&out_path).ok();
-            return Err(e).with_context(|| format!("Failed to write decrypted block to file: {}", out_path.display()));
-        }
-        
-        block_counter += 1;
-    }
+            return other;
+        }   
+    };
     
     // 确保所有数据都写入磁盘
     if let Err(e) = out_file.flush() {

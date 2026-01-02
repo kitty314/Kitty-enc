@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use rand::rngs::OsRng;
 use rand::TryRngCore;
 use std::fs::{self, File};
@@ -382,6 +382,27 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     source_file.try_lock_shared()
         .with_context(|| format!("Failed to lock file for streaming encryption: {}", path.display()))?;
 
+    // 生成 48 字节的扩展 nonce
+    let mut all_xnonce_bytes = [0u8; 48];
+    if let Err(e) = OsRng.try_fill_bytes(&mut all_xnonce_bytes) {
+        return Err(e).context("Failed to generate random nonce for streaming encryption");
+    }
+    // 拆分nonce
+    let (file_xnonce_bytes, hash_xnonce_bytes) = all_xnonce_bytes.split_at(24);
+    
+    // 使用主密钥和all_nonce作为盐派生子密钥
+    let subkey: Zeroizing<[u8; 32]> = derive_subkey_simple(master_key, &all_xnonce_bytes)?;
+    
+    // 使用 XChaCha20Poly1305 进行流式加密
+    let cipher = MyCipher::new(subkey.as_ref())?;
+        
+    // 缓冲区大小：1MB
+    let mut buffer: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; STREAMING_CHUNK_SIZE]);
+    let mut hasher = Sha256::new(None,32)?;
+    
+    // 块计数器，用于生成唯一的 nonce
+    let mut block_counter: u64 = 0;
+
     // 创建输出文件
     let mut out_file = File::create_new(&out_path)
         .with_context(|| format!("Failed to create encrypted file: {}", out_path.display()))?;
@@ -390,109 +411,72 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         return Err(e).with_context(|| format!("Failed to lock encrypted file: {}", out_path.display()))
     }
 
-
-    // 生成 48 字节的扩展 nonce
-    let mut all_xnonce_bytes = [0u8; 48];
-    if let Err(e) = OsRng.try_fill_bytes(&mut all_xnonce_bytes) {
-        // 清理已创建的加密文件
-        fs::remove_file(&out_path).ok();
-        return Err(e).context("Failed to generate random nonce for streaming encryption");
-    }
-    // 拆分nonce
-    let (file_xnonce_bytes, hash_xnonce_bytes) = all_xnonce_bytes.split_at(24);
-    
-    // 使用主密钥和all_nonce作为盐派生子密钥
-    let subkey: Zeroizing<[u8; 32]> = derive_subkey_simple(master_key, &all_xnonce_bytes)
-        .map_err(|e|{
-            fs::remove_file(&out_path).ok();
-            e
-        })?;
-    
-    // 使用 XChaCha20Poly1305 进行流式加密
-    let cipher = MyCipher::new(subkey.as_ref())?;
-    
     // 先写入 nonce
     if let Err(e) = out_file.write_all(&all_xnonce_bytes) {
         fs::remove_file(&out_path).ok();
         return Err(e).with_context(|| format!("Failed to write nonce to encrypted file: {}", out_path.display()));
     }
-    
-    // 缓冲区大小：1MB
-    let mut buffer: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; STREAMING_CHUNK_SIZE]);
-    let mut hasher = Sha256::new(None,32)?;
-    
-    // 块计数器，用于生成唯一的 nonce
-    let mut block_counter: u64 = 0;
-    
+
     // 流式读取、计算哈希、加密、写入
-    loop {
-        // 检查中断标志
-        if crate::cli::is_interrupted() {
-            my_println!("Interrupt signal received, stopping encryption of {}", path.display());
-            // 清理已创建的加密文件
-            fs::remove_file(&out_path).ok();
-            return Ok(1); // 返回成功，表示已停止处理
-        }
-        
-        let bytes_read = match source_file.read(&mut buffer) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                // 清理已创建的加密文件
-                fs::remove_file(&out_path).ok();
-                return Err(e).with_context(|| format!("Failed to read from source file: {}", path.display()));
+    let loop_result = (||-> Result<i32> {
+        loop {
+            // 检查中断标志
+            if crate::cli::is_interrupted() {
+                my_println!("Interrupt signal received, stopping encryption of {}", path.display());
+                return Ok(1); // 返回成功，表示已停止处理
             }
-        };
-        
-        if bytes_read == 0 {
-            break;
+            
+            let bytes_read = match source_file.read(&mut buffer) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    return Err(e).with_context(|| format!("Failed to read from source file: {}", path.display()));
+                }
+            };
+            
+            if bytes_read == 0 {
+                break;
+            }
+            
+            // 更新哈希
+            hasher.update(&buffer[..bytes_read]);
+            
+            // 为每个块生成唯一的 nonce
+            let block_nonce_bytes: [u8; 24] = get_block_nonce_bytes(file_xnonce_bytes, block_counter)?;
+            let block_nonce = MyXnonce::try_from_slice(&block_nonce_bytes)?;
+            
+            // 加密当前块
+            let ct: Zeroizing<Vec<u8>> = cipher.encrypt(&block_nonce, &buffer[..bytes_read])
+                .map_err(|_| {
+                    anyhow!("Encryption failed for block {} in file: {}", block_counter, path.display())
+                })?;
+            
+            // 写入加密块大小（4字节）和加密块数据
+            let ct_len = ct.len() as u32;
+            if let Err(e) = out_file.write_all(&ct_len.to_le_bytes()) {
+                return Err(e).with_context(|| format!("Failed to write block size to file: {}", out_path.display()));
+            }
+            
+            if let Err(e) = out_file.write_all(&ct) {
+                return Err(e).with_context(|| format!("Failed to write encrypted block to file: {}", out_path.display()));
+            }
+            
+            block_counter += 1;
         }
-        
-        // 更新哈希
-        hasher.update(&buffer[..bytes_read]);
-        
-        // 为每个块生成唯一的 nonce
-        let block_nonce_bytes: [u8; 24] = get_block_nonce_bytes(file_xnonce_bytes, block_counter)?;
-        let block_nonce = MyXnonce::try_from_slice(&block_nonce_bytes)?;
-        
-        // 加密当前块
-        let ct: Zeroizing<Vec<u8>> = cipher.encrypt(&block_nonce, &buffer[..bytes_read])
-            .map_err(|_| {
-                // 清理已创建的加密文件
-                fs::remove_file(&out_path).ok();
-                anyhow!("Encryption failed for block {} in file: {}", block_counter, path.display())
-            })?;
-        
-        // 写入加密块大小（4字节）和加密块数据
-        let ct_len = ct.len() as u32;
-        if let Err(e) = out_file.write_all(&ct_len.to_le_bytes()) {
-            // 清理已创建的加密文件
+        Ok(0)
+    })();
+    match loop_result {
+        Ok(0) => {}
+        other => {
             fs::remove_file(&out_path).ok();
-            return Err(e).with_context(|| format!("Failed to write block size to file: {}", out_path.display()));
-        }
-        
-        if let Err(e) = out_file.write_all(&ct) {
-            // 清理已创建的加密文件
-            fs::remove_file(&out_path).ok();
-            return Err(e).with_context(|| format!("Failed to write encrypted block to file: {}", out_path.display()));
-        }
-        
-        block_counter += 1;
-    }
+            return other;
+        }   
+    };
+
     // 解锁源文件
     if let Err(e) = source_file.unlock() {
         fs::remove_file(&out_path).ok();
         return Err(e).with_context(|| format!("Failed to unlock source file: {}", path.display()))
     }
-
-    // 计算最终哈希
-    let mut original_hash: Zeroizing<[u8; 32]> = Zeroizing::new([0u8;32]);
-    hasher.finalize_into(original_hash.as_mut())?;
-    // 加密hash
-    let encrypted_original_hash: Zeroizing<Vec<u8>> = encrypt_file_hash(&original_hash, &subkey, hash_xnonce_bytes)
-        .map_err(|e|{
-            fs::remove_file(&out_path).ok();
-            e
-        })?;
     
     // 写入结束标记：4字节0表示下一个块大小为0
     let end_marker: u32 = 0;
@@ -501,6 +485,20 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         fs::remove_file(&out_path).ok();
         return Err(e).with_context(|| format!("Failed to write end marker to encrypted file: {}", out_path.display()));
     }
+    
+    // 计算最终哈希
+    let mut original_hash: Zeroizing<[u8; 32]> = Zeroizing::new([0u8;32]);
+    if let Err(e) = hasher.finalize_into(original_hash.as_mut()){
+        fs::remove_file(&out_path).ok();
+        return Err(e.into());
+    };
+
+    // 加密hash
+    let encrypted_original_hash: Zeroizing<Vec<u8>> = encrypt_file_hash(&original_hash, &subkey, hash_xnonce_bytes)
+        .map_err(|e|{
+            fs::remove_file(&out_path).ok();
+            e
+        })?;
     
     // 写入哈希
     if let Err(e) = out_file.write_all(encrypted_original_hash.as_ref()) {

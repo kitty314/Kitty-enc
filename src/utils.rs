@@ -143,20 +143,18 @@ pub fn read_file_for_verification(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
 
 /// 判断文件是否是流式加密格式
 pub fn is_streaming_encrypted_file(path: &Path) -> Result<bool> {
-    use std::io::Read;
-    
-    // 打开文件
     let mut file = File::open(path)
         .with_context(|| format!("Failed to open file: {}", path.display()))?;
-    
+    file.try_lock_shared()
+        .with_context(|| format!("Failed to lock file: {}", path.display()))?;
+
     // 读取前52字节：48字节nonce + 4字节加密类型标记
     let mut header = [0u8; 52];
     
-    match file.read_exact(&mut header) {
+    let result = match file.read_exact(&mut header) {
         Ok(_) => {
             // 分离nonce和加密类型标记
-            let (_, enc_type_marker) = header.split_at(48);
-            
+            let (_, enc_type_marker) = header.split_at(48); 
             // 如果加密类型标记是4字节0，则是普通加密
             // 否则是流式加密（流式加密在24字节nonce之后是块大小，不会是4字节0）
             Ok(enc_type_marker != [0u8; 4])
@@ -165,7 +163,11 @@ pub fn is_streaming_encrypted_file(path: &Path) -> Result<bool> {
             // 读取失败，说明文件可能太短
             Err(anyhow!("Unable to determine whether the file is in streaming encrypted format."))
         }
-    }
+    };
+
+    file.unlock()
+        .with_context(|| format!("Failed to unlock file: {}", path.display()))?;
+    result
 }
 
 /// 通过把主nonce末8字节和计数器相加得到块nonce
