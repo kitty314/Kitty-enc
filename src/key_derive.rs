@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use std::fs::{self};
+use std::io::Read;
 use std::path::Path;
 use zeroize::Zeroizing;
 use libsodium_rs::crypto_pwhash;
@@ -76,15 +77,18 @@ pub fn derive_key_from_any_file(file_path: &Path, use_password: bool, need_confi
             return Err(e).with_context(|| format!("Failed to open file: {}", file_path.display()));
         }
     };
-    
+    file.try_lock_shared()
+        .with_context(|| format!("Failed to lock file: {}", file_path.display()))?;
+
     // 限制读取大小为1MB
     let read_size = std::cmp::min(metadata.len(), ANY_FILE_MAX_READ_SIZE as u64) as usize;
     
     let mut file_data: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; read_size]);
-    use std::io::Read;
     if let Err(e) = file.read_exact(&mut file_data) {
         return Err(e).with_context(|| format!("Failed to read file data: {}", file_path.display()));
     }
+    file.unlock()
+        .with_context(|| format!("Failed to unlock file: {}", file_path.display()))?;
     
     // 准备盐：如果不使用密码，使用文件前16字节作为盐；如果使用密码，使用密码作为盐
     let salt: &[u8];

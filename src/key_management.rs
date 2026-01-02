@@ -1,7 +1,8 @@
 use anyhow::{anyhow, Context, Result};
 use rand::rngs::OsRng;
 use rand::TryRngCore;
-use std::fs::{self};
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use chrono::Local;
 use zeroize::Zeroizing;
@@ -131,10 +132,25 @@ fn generate_key_file(path: &Path, passphrase_opt: Option<&Zeroizing<String>>) ->
     let key_data: Zeroizing<Vec<u8>> = prepare_key_data(key_bytes, passphrase_opt)?;// 如果失败这一次密钥生成就失败了,应该不需要清理内存
 
     // 写入密钥文件，如果失败则清理内存
-    if let Err(e) = fs::write(path, &key_data).with_context(|| format!("Failed to write key file: {}", path.display())) {
+    let mut key_file = File::create_new(&path)
+        .with_context(|| format!("Failed to create key file: {}", path.display()))?;
+
+    if let Err(e) = (|| -> Result<()> {
+        key_file.try_lock()
+            .with_context(|| format!("Failed to lock key file: {}", path.display()))?;
+        key_file.write_all(&key_data)
+            .with_context(|| format!("Failed to write key file: {}", path.display()))?;
+        key_file.flush()
+            .with_context(|| "Failed to flush buffer")?;
+        key_file.unlock()
+            .with_context(|| format!("Failed to unlock key file: {}", path.display()))?;
+        Ok(())
+    })() {
+        // 写入失败时清理文件
+        std::fs::remove_file(path).ok();
         return Err(e);
     }
-    
+   
     Ok(())
 }
 
@@ -192,13 +208,6 @@ fn encrypt_key_with_passphrase(key: Zeroizing<[u8; 32]>, passphrase: &str) -> Re
 }
 
 pub fn load_key(path: &Path, passphrase_opt_from_creat: Option<Zeroizing<String>>) -> Result<Zeroizing<[u8; 32]>> {
-    let bytes: Zeroizing<Vec<u8>> = match fs::read(path).with_context(|| format!("Failed to read key file: {}", path.display())) {
-        Ok(bytes) => Zeroizing::new(bytes),
-        Err(e) => {
-            return Err(e);
-        }
-    };
-    
     // 确定要使用的密码短语
     let passphrase_opt: Option<Zeroizing<String>> = match passphrase_opt_from_creat {
         Some(passphrase) => Some(passphrase),
@@ -212,9 +221,19 @@ pub fn load_key(path: &Path, passphrase_opt_from_creat: Option<Zeroizing<String>
             }
         }
     };
+
+    let mut bytes: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::new());
+    let mut file = File::open(path)
+        .with_context(|| format!("Failed to open key file: {}", path.display()))?;
+    file.try_lock_shared()
+        .with_context(|| format!("Failed to lock key file: {}", path.display()))?;
+    file.read_to_end(&mut bytes)
+        .with_context(|| format!("Failed to read key file: {}", path.display()))?;
+    file.unlock()
+        .with_context(|| format!("Failed to unlock key file: {}", path.display()))?;
     
     // 处理密码短语
-    let result = match passphrase_opt {
+    let result: Result<Zeroizing<[u8; 32]>> = match passphrase_opt {
         Some(passphrase) if !passphrase.is_empty() => {
             // 尝试用密码短语解密密钥
             match decrypt_key_with_passphrase(bytes, passphrase) {

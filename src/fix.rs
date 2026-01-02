@@ -334,10 +334,14 @@ fn verify_regular_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<i3
 
     //开始读取加密文件
     let mut data: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::new());
-    File::open(path)
-        .with_context(|| format!("Failed to open file for decryption: {}", path.display()))
-        .and_then(|mut file| file.read_to_end(&mut data)
-        .with_context(|| format!("Failed to read encrypted file: {}", path.display())))?;
+    let mut file = File::open(path)
+        .with_context(|| format!("Failed to open file for decryption: {}", path.display()))?;
+    file.try_lock_shared()
+        .with_context(|| format!("Failed to lock file for decryption: {}", path.display()))?;
+    file.read_to_end(&mut data)
+        .with_context(|| format!("Failed to read encrypted file: {}", path.display()))?;
+    file.unlock()
+        .with_context(|| format!("Failed to unlock encrypted file: {}", path.display()))?;
 
     // 分离 all_xnonce、加密类型标记、密文和存储的加密哈希
     let (all_xnonce_bytes, rest) = data.split_at(48);
@@ -395,7 +399,9 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<
     // 打开加密文件
     let mut encrypted_file = File::open(path)
         .with_context(|| format!("Failed to open file for streaming decryption: {}", path.display()))?;
-    
+    encrypted_file.try_lock_shared()
+        .with_context(|| format!("Failed to lock file for streaming decryption: {}", path.display()))?;
+
     // 读取前48字节作为 all_xnonce（24字节文件nonce + 24字节哈希nonce）
     let mut all_xnonce_bytes = [0u8; 48];
     if let Err(e) = encrypted_file.read_exact(&mut all_xnonce_bytes) {
@@ -484,7 +490,9 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<
             _ => {return Err(anyhow!("Failed to read hash from encrypted file: {}", path.display()));}           
         }
     };
-    
+    encrypted_file.unlock()
+        .with_context(|| format!("Failed to unlock file during streaming decryption: {}", path.display()))?;
+
     let mut computed_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
     verify_hasher.finalize_into(computed_hash.as_mut())?;
     
@@ -542,7 +550,9 @@ fn verify_decrypted_file(dec_path: &Path, enc_path: &Path, master_key: &[u8;32])
             return Err(e);
         }
     };
-    
+    file_for_hash.try_lock_shared()
+        .with_context(|| format!("Failed to lock decrypted file for hash verification: {}", dec_path.display()))?;
+
     let mut buffer: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; 65536]); // 64KB 缓冲区
     loop {
         // 检查中断标志
@@ -566,7 +576,9 @@ fn verify_decrypted_file(dec_path: &Path, enc_path: &Path, master_key: &[u8;32])
         
         hasher.update(&buffer[..bytes_read]);
     }
-    
+    file_for_hash.unlock()
+        .with_context(|| format!("Failed to unlock decrypted file during hash verification: {}", dec_path.display()))?;
+   
     
     // 计算解密数据的哈希
     let mut computed_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
@@ -582,6 +594,7 @@ fn verify_decrypted_file(dec_path: &Path, enc_path: &Path, master_key: &[u8;32])
 
 fn get_decrypted_src_hash_bytes_from_enc_file(enc_path: &Path, master_key: &[u8;32]) -> Result<Zeroizing<[u8;32]>> {
     let mut file = File::open(enc_path)?;
+    file.try_lock_shared()?;
     
     // 读取前48字节作为 all_xnonce（24字节文件nonce + 24字节哈希nonce）
     let mut all_xnonce_bytes = [0u8; 48];
@@ -600,7 +613,7 @@ fn get_decrypted_src_hash_bytes_from_enc_file(enc_path: &Path, master_key: &[u8;
 
     let mut encrypted_hash_bytes: Zeroizing<[u8; 48]> = Zeroizing::new([0u8; 48]);
     file.read_exact(encrypted_hash_bytes.as_mut())?;
-    
+    file.unlock()?;
     // 解密存储的哈希
     let decrypted_stored_hash: Zeroizing<[u8; 32]> = decrypt_file_hash(encrypted_hash_bytes.as_ref(), &subkey, hash_xnonce_bytes)?;
 

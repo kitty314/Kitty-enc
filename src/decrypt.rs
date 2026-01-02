@@ -202,10 +202,14 @@ fn decrypt_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
 
     //开始读取加密文件
     let mut data: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::new());
-    File::open(path)
-        .with_context(|| format!("Failed to open file for decryption: {}", path.display()))
-        .and_then(|mut file| file.read_to_end(&mut data)
-        .with_context(|| format!("Failed to read encrypted file: {}", path.display())))?;
+    let mut file = File::open(path)
+        .with_context(|| format!("Failed to open file for decryption: {}", path.display()))?;
+    file.try_lock_shared()
+        .with_context(|| format!("Failed to lock file for decryption: {}", path.display()))?;
+    file.read_to_end(&mut data)
+        .with_context(|| format!("Failed to read encrypted file: {}", path.display()))?;
+    file.unlock()
+        .with_context(|| format!("Failed to unlock encrypted file: {}", path.display()))?;
 
     // 检查文件长度：至少需要48字节all_xnonce + 4字节标记 + 48字节加密哈希
     if data.len() < 48 + 4 + 48 {
@@ -241,13 +245,25 @@ fn decrypt_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     let decrypted_stored_hash: Zeroizing<[u8; 32]> = decrypt_file_hash(stored_encrypted_hash_bytes, &subkey, hash_xnonce_bytes)?;
 
     // 先写入解密文件
-    if let Err(e) = fs::write(&out_path, &pt)
-        .with_context(|| format!("Failed to write decrypted file: {}", out_path.display()))
-    {
-        // 清理可能已经创建的文件
-        fs::remove_file(&out_path).ok();
+    let mut out_file = File::create_new(&out_path)
+        .with_context(|| format!("Failed to create decrypted file: {}", out_path.display()))?;
+
+    // 写入数据，逐段写入，避免中间 Vec
+    if let Err(e) = (|| -> Result<()> {
+        out_file.try_lock()
+            .with_context(|| format!("Failed to lock decrypted file: {}", out_path.display()))?;
+        out_file.write_all(&pt)
+            .with_context(|| format!("Failed to write decrypted file: {}", out_path.display()))?;
+        out_file.flush()
+            .with_context(|| "Failed to flush buffer")?;
+        out_file.unlock()
+            .with_context(|| format!("Failed to unlock decrypted file: {}", out_path.display()))?;
+        Ok(())
+    })() {
+        // 写入失败时清理文件
+        std::fs::remove_file(out_path).ok();
         return Err(e);
-    };
+    }
 
     match decrypt_file_verify(&out_path, decrypted_stored_hash){
         Ok(0) => {}
@@ -330,7 +346,9 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     // 打开加密文件
     let mut encrypted_file = File::open(path)
         .with_context(|| format!("Failed to open file for streaming decryption: {}", path.display()))?;
-    
+    encrypted_file.try_lock_shared()
+        .with_context(|| format!("Failed to lock file for streaming decryption: {}", path.display()))?;
+
     // 读取前48字节作为 all_xnonce（24字节文件nonce + 24字节哈希nonce）
     let mut all_xnonce_bytes = [0u8; 48];
     if let Err(e) = encrypted_file.read_exact(&mut all_xnonce_bytes) {
@@ -341,9 +359,13 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     let (file_xnonce_bytes, hash_xnonce_bytes) = all_xnonce_bytes.split_at(24);
     
     // 创建输出文件
-    let mut out_file = File::create(&out_path)
+    let mut out_file = File::create_new(&out_path)
         .with_context(|| format!("Failed to create decrypted file: {}", out_path.display()))?;
-    
+    if let Err(e) = out_file.try_lock(){
+        fs::remove_file(&out_path).ok();
+        return Err(e).with_context(|| format!("Failed to lock decrypted file: {}", out_path.display()))
+    }
+
     // 使用主密钥和all_xnonce作为盐派生子密钥（与加密保持一致）
     let subkey: Zeroizing<[u8; 32]> = derive_subkey_simple(master_key, &all_xnonce_bytes)
         .map_err(|e|{
@@ -422,7 +444,11 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         fs::remove_file(&out_path).ok();
         return Err(e).with_context(|| format!("Failed to flush decrypted file: {}", out_path.display()));
     };
-    
+    if let Err(e) = out_file.unlock(){
+        fs::remove_file(&out_path).ok();
+        return Err(e).with_context(|| format!("Failed to unlock decrypted file: {}", out_path.display()));
+    }
+
     // 读取存储的加密哈希 (48字节)
     let mut stored_encrypted_hash: Zeroizing<[u8; 48]> = Zeroizing::new([0u8; 48]);
     if let Err(e) = encrypted_file.read_exact(stored_encrypted_hash.as_mut()) {
@@ -430,6 +456,10 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         fs::remove_file(&out_path).ok();
         return Err(e).with_context(|| format!("Failed to read hash from encrypted file: {}", path.display()));
     };
+    if let Err(e) = encrypted_file.unlock(){
+        fs::remove_file(&out_path).ok();
+        return Err(e).with_context(|| format!("Failed to unlock encrypted file: {}", path.display()));
+    }
     
     // 解密存储的哈希
     let decrypted_stored_hash: Zeroizing<[u8; 32]> = decrypt_file_hash(stored_encrypted_hash.as_ref(), &subkey, hash_xnonce_bytes)
@@ -469,9 +499,11 @@ fn decrypt_file_streaming_verify(out_path: &Path, decrypted_stored_hash_bytes: Z
     let mut verify_file = match File::open(&out_path) {
         Ok(file) => file,
         Err(e) => {
-            return Err(e).with_context(|| format!("Failed to open encrypted file for verification: {}", out_path.display()));
+            return Err(e).with_context(|| format!("Failed to open decrypted file for verification: {}", out_path.display()));
         }
     };
+    verify_file.try_lock_shared()
+        .with_context(|| format!("Failed to lock decrypted file for verification: {}", out_path.display()))?;
 
     let mut verify_hasher = Sha256::new(None,32)?;
     
@@ -496,6 +528,8 @@ fn decrypt_file_streaming_verify(out_path: &Path, decrypted_stored_hash_bytes: Z
         
         verify_hasher.update(&buffer[..bytes_read]);
     }
+    verify_file.unlock()
+        .with_context(|| format!("Failed to unlock decrypted file during verification: {}", out_path.display()))?;
     
     
     // 计算解密数据的哈希

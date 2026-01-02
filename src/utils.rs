@@ -130,10 +130,14 @@ pub fn verify_file_not_empty(path: &Path) -> Result<()> {
 /// 读取文件用于验证
 pub fn read_file_for_verification(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
     let mut data = Zeroizing::new(Vec::new());
-    File::open(path)
-        .with_context(|| format!("Failed to open file for verification: {}", path.display()))?
-        .read_to_end(&mut data)
-        .with_context(|| format!("Failed to read file: {}", path.display()))?;
+    let mut file = File::open(path)
+        .with_context(|| format!("Failed to open file for verification: {}", path.display()))?;
+    file.try_lock_shared()
+        .with_context(|| format!("Failed to lock file for verification: {}", path.display()))?;
+    file.read_to_end(&mut data)
+        .with_context(|| format!("Failed to read file for verification: {}", path.display()))?;
+    file.unlock()
+        .with_context(|| format!("Failed to unlock file during verification: {}", path.display()))?;
     Ok(data)
 }
 
