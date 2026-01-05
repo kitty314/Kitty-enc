@@ -4,11 +4,14 @@ use rand::TryRngCore;
 use std::fs::{self, File};
 use std::io::{Write, Read};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Receiver;
 use crate::MySha256 as Sha256;
 use zeroize::Zeroizing;
 use rayon::prelude::*;  // 添加 rayon 并行处理
 use ignore::WalkBuilder;
 use ignore::DirEntry as ignore_DirEntry;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc};
+use std::thread;
 
 use crate::*;
 
@@ -114,7 +117,7 @@ pub fn process_encrypt_dir(dir: &Path, master_key: &[u8;32], key_path_opt: Optio
             }
             result
         })
-        .collect();
+        .collect(); // 2026.1.5 完成一个任务就收集一次，如果一个任务panic, 主线程收集后会直接panic
     
     // 统计结果
     let mut success_count = 0;
@@ -206,37 +209,55 @@ fn encrypt_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         }
     };
 
+    // 启动hash子线程
+    let stop_flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+    let hash_calculation_subthread = {
+        let stop_flag_2 = stop_flag.clone();
+        let path = path.to_owned();
+        thread::spawn(||{hash_calculation_subthread_fn(path, stop_flag_2)})
+    };
+
     // 读取源文件
     let mut data: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::new());// 保护数据
-    let mut file = File::open(path)
-        .with_context(|| format!("Failed to open file for encryption: {}", path.display()))?;
-    file.try_lock_shared()
-        .with_context(|| format!("Failed to lock file for encryption: {}", path.display()))?;
-    file.read_to_end(&mut data)
-        .with_context(|| format!("Failed to read file: {}", path.display()))?;
-    file.unlock()
-        .with_context(|| format!("Failed to unlock file: {}", path.display()))?;
+    if let Err(e) = (|| -> Result<()> {
+        let mut file = File::open(path)
+            .with_context(|| format!("Failed to open file for encryption: {}", path.display()))?;
+        file.try_lock_shared()
+            .with_context(|| format!("Failed to lock file for encryption: {}", path.display()))?;
+        file.read_to_end(&mut data)
+            .with_context(|| format!("Failed to read file: {}", path.display()))?;
+        file.unlock()
+            .with_context(|| format!("Failed to unlock file: {}", path.display()))?;
+        Ok(())
+    })() {
+        stop_flag.store(true, Ordering::SeqCst);
+        return Err(e);
+    };
 
-    // 计算源文件的 SHA256 哈希用于完整性验证
-    let mut hasher = Sha256::new(None,32)?;
-    hasher.update(&data);
-    let mut original_hash: Zeroizing<[u8; 32]> = Zeroizing::new([0u8;32]);
-    hasher.finalize_into(original_hash.as_mut())?;// 保护数据2
+    // 2025.12.25 根据chacha20poly1305 = "0.10.1"的文档，cipher在drop时实现内部清零
+    let cipher = MyCipher::new(subkey.as_ref())
+        .map_err(|e|{stop_flag.store(true, Ordering::SeqCst);e})?;
+    
+    let ct: Zeroizing<Vec<u8>> = match cipher.encrypt(&file_xnonce, data.as_ref()) {
+        Ok(ct) => ct,
+        Err(_) => {
+            stop_flag.store(true, Ordering::SeqCst);
+            return Err(anyhow!("Encryption failed for {}", path.display()));
+        }
+    };
 
+    // 获取源文件hash, 如果子线程panic，直接panic
+    let original_hash: Zeroizing<[u8; 32]> = match hash_calculation_subthread.join().unwrap(){
+        Ok(original_hash) => original_hash,
+        Err(e) => {
+            return Err(anyhow!("Hash_Calculation_SubThread_Err: {e}"));
+        }
+    };
     // 加密hash
     let encrypted_original_hash: Zeroizing<Vec<u8>> = match encrypt_file_hash(&original_hash, &subkey, hash_xnonce_bytes) {
         Ok(encrypted_original_hash) => encrypted_original_hash,
         Err(e) => {
             return Err(e);
-        }
-    };
-
-    // 2025.12.25 根据chacha20poly1305 = "0.10.1"的文档，cipher在drop时实现内部清零
-    let cipher = MyCipher::new(subkey.as_ref())?;
-    let ct: Zeroizing<Vec<u8>> = match cipher.encrypt(&file_xnonce, data.as_ref()) {
-        Ok(ct) => ct,
-        Err(_) => {
-            return Err(anyhow!("Encryption failed for {}", path.display()));
         }
     };
 
@@ -398,8 +419,7 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         
     // 缓冲区大小：1MB
     let mut buffer: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; STREAMING_CHUNK_SIZE]);
-    let mut hasher = Sha256::new(None,32)?;
-    
+ 
     // 块计数器，用于生成唯一的 nonce
     let mut block_counter: u64 = 0;
 
@@ -417,6 +437,25 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
         return Err(e).with_context(|| format!("Failed to write nonce to encrypted file: {}", out_path.display()));
     }
 
+    // 启动hash子线程
+    let stop_flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+    let subthread_err_flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+    let hash_calculation_subthread = {
+        let stop_flag_2 = stop_flag.clone();
+        let subthread_err_flag_2 = subthread_err_flag.clone();
+        let path = path.to_owned();
+        thread::spawn(move||{
+            match hash_calculation_subthread_fn(path, stop_flag_2){
+                Ok(hash) => Ok(hash),
+                Err(e) => {
+                    subthread_err_flag_2.store(true, Ordering::SeqCst);
+                    // my_eprintln!("Hash_Calculation_SubThread_Err: {e}");
+                    return Err(anyhow!("Hash_Calculation_SubThread_Err: {e}"));
+                }
+            }
+        })
+    };
+
     // 流式读取、计算哈希、加密、写入
     let loop_result = (||-> Result<i32> {
         loop {
@@ -425,7 +464,10 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
                 my_println!("Interrupt signal received, stopping encryption of {}", path.display());
                 return Ok(1); // 返回成功，表示已停止处理
             }
-            
+            // 检查子线程是否出错
+            if subthread_err_flag.load(Ordering::SeqCst) {
+                return Ok(9);
+            }
             let bytes_read = match source_file.read(&mut buffer) {
                 Ok(bytes) => bytes,
                 Err(e) => {
@@ -436,10 +478,7 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
             if bytes_read == 0 {
                 break;
             }
-            
-            // 更新哈希
-            hasher.update(&buffer[..bytes_read]);
-            
+                     
             // 为每个块生成唯一的 nonce
             let block_nonce_bytes: [u8; 24] = get_block_nonce_bytes(file_xnonce_bytes, block_counter)?;
             let block_nonce = MyXnonce::try_from_slice(&block_nonce_bytes)?;
@@ -466,7 +505,15 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     })();
     match loop_result {
         Ok(0) => {}
+        Ok(9) => {
+            fs::remove_file(&out_path).ok();
+            match hash_calculation_subthread.join().unwrap(){
+                Err(e) => {return Err(e);}
+                Ok(_) => {return Err(anyhow!("Hash_Calculation_SubThread_Err_Flag has been set but result is not error"));}
+            }
+        }
         other => {
+            stop_flag.store(true, Ordering::SeqCst);
             fs::remove_file(&out_path).ok();
             return other;
         }   
@@ -474,6 +521,7 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
 
     // 解锁源文件
     if let Err(e) = source_file.unlock() {
+        stop_flag.store(true, Ordering::SeqCst);
         fs::remove_file(&out_path).ok();
         return Err(e).with_context(|| format!("Failed to unlock source file: {}", path.display()))
     }
@@ -481,24 +529,24 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     // 写入结束标记：4字节0表示下一个块大小为0
     let end_marker: u32 = 0;
     if let Err(e) = out_file.write_all(&end_marker.to_le_bytes()) {
+        stop_flag.store(true, Ordering::SeqCst);
         // 清理已创建的加密文件
         fs::remove_file(&out_path).ok();
         return Err(e).with_context(|| format!("Failed to write end marker to encrypted file: {}", out_path.display()));
     }
-    
-    // 计算最终哈希
-    let mut original_hash: Zeroizing<[u8; 32]> = Zeroizing::new([0u8;32]);
-    if let Err(e) = hasher.finalize_into(original_hash.as_mut()){
-        fs::remove_file(&out_path).ok();
-        return Err(e.into());
-    };
 
+    // 获取源文件hash, 如果子线程panic，直接panic
+    let original_hash: Zeroizing<[u8; 32]> = match hash_calculation_subthread.join().unwrap(){
+        Ok(original_hash) => original_hash,
+        Err(e) => {
+            fs::remove_file(&out_path).ok();
+            return Err(e);
+        }
+    };
+    
     // 加密hash
     let encrypted_original_hash: Zeroizing<Vec<u8>> = encrypt_file_hash(&original_hash, &subkey, hash_xnonce_bytes)
-        .map_err(|e|{
-            fs::remove_file(&out_path).ok();
-            e
-        })?;
+        .map_err(|e|{fs::remove_file(&out_path).ok();e})?;
     
     // 写入哈希
     if let Err(e) = out_file.write_all(encrypted_original_hash.as_ref()) {
@@ -567,69 +615,174 @@ fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;32]) -> Resul
     let cipher_verify = MyCipher::new(subkey_verify.as_ref())?;
     
     let mut verify_block_counter: u64 = 0;
-    let mut verify_hasher = Sha256::new(None,32)?;
-    
-    // 流式读取并验证每个加密块
-    loop {
-        // 检查中断标志
-        if crate::cli::is_interrupted() {
-            my_println!("Interrupt signal received, stopping verification of {}", out_path.display());
-            return Ok(1); // 返回成功，表示已停止处理
-        }
-        
-        // 读取块大小 (4字节)
-        let mut block_size_bytes = [0u8; 4];
-        if let Err(e) = verify_file.read_exact(&mut block_size_bytes) {
-            return Err(e).with_context(|| format!("Failed to read block size from encrypted file: {}", out_path.display()));
-        }
-        
-        let block_size = u32::from_le_bytes(block_size_bytes);
-        
-        // 如果块大小为0，表示文件结束
-        if block_size == 0 {
-            break;
-        }
-        
-        let block_size = block_size as usize;
-        
-        // 读取加密块
-        let mut encrypted_block: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; block_size]);
-        if let Err(e) = verify_file.read_exact(&mut encrypted_block) {
-            return Err(e).with_context(|| format!("Failed to read encrypted block {} from file: {}", verify_block_counter, out_path.display()));
-        }
-        
-        // 为当前块生成 nonce
-        // 为每个块生成唯一的 nonce
-        let block_nonce_bytes: [u8; 24] = get_block_nonce_bytes(file_xnonce_bytes_verify, verify_block_counter)?;
-        let block_nonce = MyXnonce::try_from_slice(&block_nonce_bytes)?;
-        
-        // 解密当前块
-        let decrypted_block: Zeroizing<Vec<u8>> = cipher_verify.decrypt(&block_nonce, encrypted_block.as_ref())
-            .map_err(|_| {
-                anyhow!("Encryption verification failed for block {}: {}", verify_block_counter, out_path.display())
-            })?;
-        
-        // 更新验证哈希
-        verify_hasher.update(&decrypted_block);
 
-        verify_block_counter += 1;
-    }
-    
+    // 哈希验证子线程   
+    let (tx, rx) = mpsc::channel::<Zeroizing<Vec<u8>>>();
+    let stop_flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+    let subthread_err_flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));  
+    let hash_verify_subthread = {
+        let rx_2 = rx;
+        let stop_flag_2 = stop_flag.clone();
+        let subthread_err_flag_2 = subthread_err_flag.clone();
+        let out_path = out_path.to_owned();
+        thread::spawn(move||{
+            match hash_verify_subthread_fn(rx_2, stop_flag_2, out_path){
+                Ok(hash) => Ok(hash),
+                Err(e) => {
+                    subthread_err_flag_2.store(true, Ordering::SeqCst);
+                    return Err(anyhow!("Hash_Verify_SubThread_Err: {e}"));
+                }
+            }
+        })
+    };
+
+    // 流式读取并验证每个加密块
+    let loop_result = (|| -> Result<i32> {
+        loop {
+            // 检查中断标志
+            if crate::cli::is_interrupted() {
+                my_println!("Interrupt signal received, stopping verification of {}", out_path.display());
+                return Ok(1); // 返回成功，表示已停止处理
+            }
+            // 检查子线程是否出错
+            if subthread_err_flag.load(Ordering::SeqCst) {
+                return Ok(9);
+            }
+
+            // 读取块大小 (4字节)
+            let mut block_size_bytes = [0u8; 4];
+            if let Err(e) = verify_file.read_exact(&mut block_size_bytes) {
+                return Err(e).with_context(|| format!("Failed to read block size from encrypted file: {}", out_path.display()));
+            }
+            
+            let block_size = u32::from_le_bytes(block_size_bytes);
+            
+            // 如果块大小为0，表示文件结束
+            if block_size == 0 {
+                break;
+            }
+            
+            let block_size = block_size as usize;
+            
+            // 读取加密块
+            let mut encrypted_block: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; block_size]);
+            if let Err(e) = verify_file.read_exact(&mut encrypted_block) {
+                return Err(e).with_context(|| format!("Failed to read encrypted block {} from file: {}", verify_block_counter, out_path.display()));
+            }
+            
+            // 为当前块生成 nonce
+            // 为每个块生成唯一的 nonce
+            let block_nonce_bytes: [u8; 24] = get_block_nonce_bytes(file_xnonce_bytes_verify, verify_block_counter)?;
+            let block_nonce = MyXnonce::try_from_slice(&block_nonce_bytes)?;
+            
+            // 解密当前块
+            let decrypted_block: Zeroizing<Vec<u8>> = cipher_verify.decrypt(&block_nonce, encrypted_block.as_ref())
+                .map_err(|_| {
+                    anyhow!("Encryption verification failed for block {}: {}", verify_block_counter, out_path.display())
+                })?;
+            
+            // 更新验证哈希
+            tx.send(decrypted_block)
+                .context(format!("Send decrypted block {} to hash verify subthread failed: {}", verify_block_counter, out_path.display()))?;
+
+            verify_block_counter += 1;
+        }
+        Ok(0)
+    })();
+    drop(tx);
+    match loop_result {
+        Ok(0) => {}
+        Ok(9) => {
+            match hash_verify_subthread.join().unwrap(){
+                Err(e) => {return Err(e);}
+                Ok(_) => {return Err(anyhow!("Hash_Verify_SubThread_Err_Flag has been set but result is not error"));}
+            }
+        }       
+        other => {
+            stop_flag.store(true, Ordering::SeqCst);
+            return other;
+        }   
+    };
+   
     // 读取并验证哈希 (48字节)
     let mut stored_encrypted_hash: Zeroizing<[u8; 48]> = Zeroizing::new([0u8; 48]);
     if let Err(e) = verify_file.read_exact(stored_encrypted_hash.as_mut()) {
+        stop_flag.store(true, Ordering::SeqCst);
         return Err(e).with_context(|| format!("Failed to read hash from encrypted file: {}", out_path.display()));
     }
-    verify_file.unlock()
-        .with_context(|| format!("Failed to unlock encrypted file during verification: {}", out_path.display()))?;
-    
-    let mut computed_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
-    verify_hasher.finalize_into(computed_hash.as_mut())?;
-    
+    if let Err(e) = verify_file.unlock() {
+        stop_flag.store(true, Ordering::SeqCst);
+        return Err(e).with_context(|| format!("Failed to unlock encrypted file during verification: {}", out_path.display()));
+    }
+    let computed_hash: Zeroizing<[u8; 32]> = hash_verify_subthread.join().unwrap()?;
+ 
     let decrypted_stored_hash_bytes: Zeroizing<[u8; 32]> = decrypt_file_hash(stored_encrypted_hash.as_ref(), &subkey_verify, hash_xnonce_bytes_verify)?;
     
     if computed_hash != decrypted_stored_hash_bytes {
         return Err(anyhow!("Integrity check failed for encrypted file: {}", out_path.display()));
     }
     Ok(0)
+}
+
+/// 读取并计算源文件哈希
+fn hash_calculation_subthread_fn(src_path: PathBuf, stop_flag: Arc<AtomicBool>) -> Result<Zeroizing<[u8; 32]>> {    
+    let mut src_file = match File::open(&src_path) {
+        Ok(file) => file,
+        Err(e) => {
+            return Err(e).with_context(|| format!("Failed to open source file for hash calculation: {}", src_path.display()));
+        }
+    };
+    src_file.try_lock_shared()
+        .with_context(|| format!("Failed to lock source file for hash calculation: {}", src_path.display()))?;
+
+    let mut hasher = Sha256::new(None,32)?;
+    
+    let mut buffer: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; 65536]); // 64KB 缓冲区
+    loop {
+        // 检查中断标志
+        if stop_flag.load(Ordering::SeqCst) {
+            my_println!("Hash_Calculation_SubThread: Stop signal received, stopping hash calculation of {}", src_path.display());
+            return Err(anyhow!("Stop signal received, stopping hash calculation of {}", src_path.display()));
+        }
+        
+        let bytes_read = match src_file.read(&mut buffer)
+            .with_context(|| format!("Failed to read source file for hash calculation: {}", src_path.display()))
+        {
+            Ok(bytes) => bytes,
+            Err(e) => {return Err(e);}
+        };
+        
+        if bytes_read == 0 {
+            break;
+        }
+        
+        hasher.update(&buffer[..bytes_read]);
+    }
+    src_file.unlock()
+        .with_context(|| format!("Failed to unlock source file during hash calculation: {}", src_path.display()))?;
+    
+    
+    // 计算哈希
+    let mut computed_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
+    hasher.finalize_into(computed_hash.as_mut())?;
+        
+    Ok(computed_hash)
+}
+
+fn hash_verify_subthread_fn(rx: Receiver<Zeroizing<Vec<u8>>>, stop_flag: Arc<AtomicBool>, out_path: PathBuf)-> Result<Zeroizing<[u8;32]>>{
+    let mut verify_hasher = Sha256::new(None,32)?; 
+    for msg in rx {
+        if stop_flag.load(Ordering::SeqCst) {
+            my_println!("Hash_Verify_SubThread: Stop signal received, stopping hash verification of {}", out_path.display());
+            return Err(anyhow!("Stop signal received, stopping hash verification of {}", out_path.display()));
+        }
+        verify_hasher.update(&msg);
+    }
+    if stop_flag.load(Ordering::SeqCst) {
+        my_println!("Hash_Verify_SubThread: Stop signal received, stopping hash verification of {}", out_path.display());
+        return Err(anyhow!("Stop signal received, stopping hash verification of {}", out_path.display()));
+    }
+    let mut computed_hash:Zeroizing<[u8;32]> = Zeroizing::new([0u8;32]);
+    verify_hasher.finalize_into(computed_hash.as_mut())?;
+    Ok(computed_hash)
 }

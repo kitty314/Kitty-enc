@@ -274,9 +274,9 @@ impl Key {
             )));
         }
 
-        let mut key = [0u8; KEYBYTES];
-        key.copy_from_slice(bytes);
-        Ok(Key(key))
+        let mut key = Key([0u8; KEYBYTES]);
+        key.0.copy_from_slice(bytes);
+        Ok(key)
     }
 
     /// Generate a new random key

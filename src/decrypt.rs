@@ -458,10 +458,7 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     
     // 解密存储的哈希
     let decrypted_stored_hash: Zeroizing<[u8; 32]> = decrypt_file_hash(stored_encrypted_hash.as_ref(), &subkey, hash_xnonce_bytes)
-        .map_err(|e|{
-            fs::remove_file(&out_path).ok();
-            e
-        })?;
+        .map_err(|e|{fs::remove_file(&out_path).ok();e})?;
     
     // 调用验证函数进行验证
     match decrypt_file_streaming_verify(&out_path, decrypted_stored_hash) {
