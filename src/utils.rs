@@ -150,24 +150,25 @@ pub fn is_streaming_encrypted_file(path: &Path) -> Result<bool> {
 
     // 读取前52字节：48字节nonce + 4字节加密类型标记
     let mut header = [0u8; 52];
-    
-    let result = match file.read_exact(&mut header) {
-        Ok(_) => {
-            // 分离nonce和加密类型标记
-            let (_, enc_type_marker) = header.split_at(48); 
-            // 如果加密类型标记是4字节0，则是普通加密
-            // 否则是流式加密（流式加密在24字节nonce之后是块大小，不会是4字节0）
-            Ok(enc_type_marker != [0u8; 4])
-        }
-        Err(_) => {
-            // 读取失败，说明文件可能太短
-            Err(anyhow!("Unable to determine whether the file is in streaming encrypted format."))
-        }
-    };
-
+    let size = file.metadata()?.len();
+    if let Err(_) = file.read_exact(&mut header) {
+        // 读取失败，说明文件可能太短
+        return Err(anyhow!("Unable to determine whether the file is in streaming encrypted format."))
+    };    
     file.unlock()
         .with_context(|| format!("Failed to unlock file: {}", path.display()))?;
-    result
+
+    // 分离nonce和加密类型标记
+    let (_, enc_type_marker) = header.split_at(48); 
+    // 如果加密类型标记是4字节0，则是普通加密
+    // 否则是流式加密（流式加密在24字节nonce之后是块大小，不会是4字节0）
+    let is_streaming_by_marker = enc_type_marker != [0u8; 4];
+    let is_streaming_by_size = size > 48+4+STREAMING_THRESHOLD+16+48;
+    if is_streaming_by_marker == is_streaming_by_size {
+        return Ok(is_streaming_by_marker);
+    } else {
+        return Err(anyhow!("Conflicting streaming format checks: Marker: {is_streaming_by_marker}, Size: {is_streaming_by_size}."));
+    }
 }
 
 /// 通过把主nonce末8字节和计数器相加得到块nonce

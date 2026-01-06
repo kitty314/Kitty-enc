@@ -660,6 +660,8 @@ fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;32]) -> Resul
             // 如果块大小为0，表示文件结束
             if block_size == 0 {
                 break;
+            } else if block_size > (STREAMING_CHUNK_SIZE + 16) as u32 {
+                return Err(anyhow!("验证时发现密文大小不合理"));
             }
             
             let block_size = block_size as usize;
