@@ -34,9 +34,10 @@
 //! - **[`crypto_aead`]**: Authenticated Encryption with Associated Data (AEAD)
 //! - **[`crypto_auth`]**: Secret-key message authentication
 //! - **[`crypto_box`]**: Public-key authenticated encryption
-//! - **[`crypto_core`]**: Core cryptographic operations
+//! - **[`crypto_core`]**: Core cryptographic operations (Ed25519, Ristretto255, Keccak1600)
 //! - **[`crypto_generichash`]**: Cryptographic hash functions (BLAKE2b)
 //! - **[`crypto_hash`]**: Traditional cryptographic hash functions (SHA-256, SHA-512)
+//! - **[`crypto_ipcrypt`]**: IP address encryption for privacy-preserving storage
 //! - **[`crypto_kdf`]**: Key derivation functions
 //! - **[`crypto_kx`]**: Key exchange
 //! - **[`crypto_pwhash`]**: Password hashing and key derivation
@@ -46,6 +47,7 @@
 //! - **[`crypto_shorthash`]**: Short-input hash functions (SipHash)
 //! - **[`crypto_sign`]**: Public-key signatures
 //! - **[`crypto_stream`]**: Stream ciphers
+//! - **[`crypto_xof`]**: Extendable Output Functions (SHAKE, TurboSHAKE)
 //! - **[`random`]**: Secure random number generation
 //! - **[`utils`]**: Utility functions
 //! - **[`version`]**: Library version information
@@ -117,6 +119,7 @@ pub mod crypto_box;
 pub mod crypto_core;
 pub mod crypto_generichash;
 pub mod crypto_hash;
+pub mod crypto_ipcrypt;
 pub mod crypto_kdf;
 pub mod crypto_kx;
 pub mod crypto_onetimeauth;
@@ -128,6 +131,7 @@ pub mod crypto_shorthash;
 pub mod crypto_sign;
 pub mod crypto_stream;
 pub mod crypto_verify;
+pub mod crypto_xof;
 pub mod random;
 pub mod utils;
 pub mod version;

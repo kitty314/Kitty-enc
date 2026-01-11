@@ -303,9 +303,9 @@ checksum = "9b10589d1a5e400d61f9f38f12f884cfd080ff345de8f17efda36fe0e4a02aa8"
 
 [[package]]
 name = "ctor"
-version = "0.5.0"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67773048316103656a637612c4a62477603b777d91d9c62ff2290f9cde178fdb"
+checksum = "424e0138278faeb2b401f174ad17e715c829512d74f3d1e81eb43365c2e0590e"
 dependencies = [
  "ctor-proc-macro",
  "dtor",
@@ -313,9 +313,9 @@ dependencies = [
 
 [[package]]
 name = "ctor-proc-macro"
-version = "0.0.6"
+version = "0.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2931af7e13dc045d8e9d26afccc6fa115d64e115c9c84b1166288b46f6782c2"
+checksum = "52560adf09603e58c9a7ee1fe1dcb95a16927b17c127f0ac02d6e768a0e25bc1"
 
 [[package]]
 name = "ctrlc"
@@ -585,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "kitty_enc"
-version = "0.5.12-dev"
+version = "0.5.13-dev"
 dependencies = [
  "anyhow",
  "chrono",
@@ -650,7 +650,7 @@ dependencies = [
 
 [[package]]
 name = "libsodium-rs"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "ct-codecs",
  "ctor",
@@ -663,9 +663,9 @@ dependencies = [
 
 [[package]]
 name = "libsodium-sys-stable"
-version = "1.22.7"
+version = "1.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac17291fbf287a2b9a7a51ef4688862fc257cab5ca6822020f20b35f647ce3c2"
+checksum = "598b85ca17f62a7ca46846ff87e06765e44df6e23175ae8e1420a1df02b2cf3c"
 dependencies = [
  "cc",
  "libc",

@@ -1,6 +1,6 @@
 [package]
 name = "kitty_enc"
-version = "0.5.12-dev"
+version = "0.5.13-dev"
 edition = "2024"
 
 [dependencies]
@@ -28,4 +28,4 @@ strip = "symbols"
 debug = false
 
 [patch.crates-io]
-libsodium-rs = { path = "libsodium-rs-0.2.1-for-knc" }
+libsodium-rs = { path = "libsodium-rs-for-knc" }
