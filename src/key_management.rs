@@ -58,7 +58,7 @@ pub fn get_or_create_key_path(target_dir_or_file: &Path, key_opt: &Option<PathBu
 /// 在指定目录中查找现有的密钥文件
 /// 如果找到多个密钥文件，返回错误要求用户手动指定
 fn find_existing_key_file(dir: &Path) -> Result<Option<PathBuf>> {
-    let mut key_files = Vec::new();
+    let mut key_files: Vec<PathBuf> = Vec::new();
     
     let entries = fs::read_dir(dir)
         .with_context(|| format!("Failed to read directory: {}", dir.display()))?;

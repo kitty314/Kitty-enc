@@ -1,5 +1,4 @@
 use std::{fs::File, io::Read, path::PathBuf, process::exit};
-use base64::{Engine, engine::general_purpose};
 use rand::{TryRngCore, rngs::OsRng};
 use zeroize::{Zeroize, Zeroizing};
 use anyhow::{Context, Result, anyhow};
@@ -126,7 +125,7 @@ pub fn msg_load_key() -> Result<Zeroizing<[u8; 32]>> {
     }
 
     // Base64 解码
-    let decoded: Zeroizing<Vec<u8>> = Zeroizing::new(general_purpose::STANDARD
+    let decoded: Zeroizing<Vec<u8>> = Zeroizing::new(MyBase256::new()
         .decode(input.trim())
         .map_err(|e| anyhow!("Base64解码失败: {}", e))?);
 
@@ -146,7 +145,7 @@ pub fn msg_load_key() -> Result<Zeroizing<[u8; 32]>> {
 /// 转换为Base64字符串
 pub fn msg_base64(data: &[u8]) -> Result<Zeroizing<String>>{
     // 2026.1.12 已检查，encode 完整中间副本作为结果传出，计算时生成的片段没有清理
-    let encoded: Zeroizing<String> = Zeroizing::new(general_purpose::STANDARD.encode(data));
+    let encoded: Zeroizing<String> = Zeroizing::new(MyBase256::new().encode(data));
     Ok(encoded)
 }
 /// 加密消息
@@ -171,7 +170,7 @@ pub fn msg_encrypt(msg: Zeroizing<String>, master_key: &[u8;32], random_key: boo
         }
     };
 
-    let mut ct_msg: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::new());
+    let mut ct_msg: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::with_capacity(xnonce_bytes.len()+ct.len()));
     ct_msg.extend_from_slice(&xnonce_bytes);
     ct_msg.append(ct.as_mut());
 
@@ -187,7 +186,7 @@ pub fn msg_encrypt(msg: Zeroizing<String>, master_key: &[u8;32], random_key: boo
 /// 解密消息
 pub fn msg_decrypt(ct_msg_base64: Zeroizing<String>, master_key: &[u8; 32]) -> Result<i32> {
     // Base64 解码
-    let ct_msg: Zeroizing<Vec<u8>> = Zeroizing::new(general_purpose::STANDARD
+    let ct_msg: Zeroizing<Vec<u8>> = Zeroizing::new(MyBase256::new()
         .decode(ct_msg_base64.trim())
         .map_err(|e| anyhow!("Base64解码失败: {}", e))?);
 

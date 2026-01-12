@@ -1,6 +1,6 @@
 [package]
 name = "kitty_enc"
-version = "0.5.14-msg"
+version = "0.5.15-msg"
 edition = "2024"
 
 [dependencies]
@@ -16,12 +16,12 @@ ignore = "0.4.25"
 ctrlc = "3.5.1"
 lazy_static = "1.5.0"
 libsodium-rs = { version = "0.2.1", features = ["optimized", "fetch-latest", "minimal"] }
-base64 = "0.22.1"
 
 # argon2 = { version = "0.5.3", features = ["zeroize"] } # 依赖不可信任
 # chacha20poly1305 = "0.10.1" # 主体可信任，依赖未审察
 # sha2 = "0.10.9" # 不可信任
 # generic-array = { version = "0.14.7", features = ["zeroize"] } # 需要替换
+# base64 = "0.22.1"
 
 [profile.release]
 panic = "abort"

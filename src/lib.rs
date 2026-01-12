@@ -12,6 +12,7 @@ pub mod read_io;
 pub mod key_derive;
 pub mod my_enc_dec;
 pub mod msg;
+pub mod base256;
 
 // 重新导出常用的类型和函数，方便外部使用
 pub use cli::*;
@@ -27,6 +28,7 @@ pub use read_io::*;
 pub use key_derive::*;
 pub use my_enc_dec::*;
 pub use msg::*;
+pub use base256::*;
 
 // 如果需要，可以在这里定义一些公共的类型别名或常量
 pub const STREAMING_THRESHOLD: u64 = 10 * 1024 * 1024; // 10MB，超过这个大小使用流式加密

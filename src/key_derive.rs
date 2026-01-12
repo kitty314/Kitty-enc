@@ -118,7 +118,7 @@ pub fn my_argon2_into(password:&[u8], salt:&[u8], out:&mut [u8]) -> Result<()> {
         return Err(anyhow!("派生密钥失败, 输出缓冲区长度不正确"));
     }
     let salt_16: Zeroizing<Vec<u8>> = argon2_input_to_16(salt)?;
-    let mut pwd_salt_pair: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::new());
+    let mut pwd_salt_pair: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::with_capacity(password.len()+salt.len()+salt_16.len()));
     pwd_salt_pair.extend_from_slice(password);
     pwd_salt_pair.extend_from_slice(salt);
     pwd_salt_pair.extend_from_slice(&salt_16);
