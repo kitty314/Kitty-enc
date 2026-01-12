@@ -173,6 +173,9 @@ pub enum Mode {
         /// 纯密码模式
         #[arg(short = 'p', long = "passwd", help = "使用纯密码模式，不生成密钥文件，与-a同时使用表示使用密码")]
         passwd: bool,
+        /// 编码模式
+        #[arg(short = 'm', long = "mode", value_name = "U32", help = "编码模式, 可选0, 1, 2", default_value_t = 0)]
+        base256mode_code: u32,
     },
 }
 
@@ -244,7 +247,7 @@ fn normalize_cli_paths(cli: &mut Cli, run_dir: &PathBuf) ->Result<()>{
             normalize_optional_path(dec_dir, run_dir)?;
             normalize_optional_path(key_file, run_dir)?;
         }
-        Some(Mode::Msg { src_dir, dec: _, key_file, any_file, passwd: _ }) => {
+        Some(Mode::Msg { src_dir, dec: _, key_file, any_file, passwd: _, base256mode_code: _ }) => {
             normalize_optional_path(src_dir, run_dir)?;
             normalize_optional_path(key_file, run_dir)?;
             normalize_optional_path(any_file, run_dir)?;

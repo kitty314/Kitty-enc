@@ -154,79 +154,86 @@ pub fn cli_match_main(cli: &Cli, exe_path: &PathBuf,run_dir: &PathBuf) -> Result
 }
 
 pub fn cli_match_msg(cli: &Cli) -> Result<()> {
-    if let Some(Mode::Msg { src_dir, dec, key_file, any_file, passwd }) = &cli.mode{
+    if let Some(Mode::Msg { src_dir, dec, key_file, any_file, passwd, base256mode_code}) = &cli.mode{
         my_println!("您正在使用消息加密模式，该模式不适合用于高度安全的加密传输消息，除非拥有极度安全的通道用于密钥传输，否则消息的安全性几乎等于密钥传输的安全性");
         my_println!("如果对于点对点加密传输有极高的安全性需求，你应该寻找支持非对称加密，密钥交换，随机数交换等功能的软件");
+        let base256mode = match base256mode_code {
+            0 => Base256Mode::YiSyllable,
+            1 => Base256Mode::CjkIdeograph,
+            2 => Base256Mode::MiscellaneousSymbols,
+            _ => Base256Mode::YiSyllable,
+        };
+
         match (src_dir, dec, key_file, any_file, passwd) {
             // 随机密钥模式
             (None, false, None, None, false) => {
                 let pt_msg: Zeroizing<String> = msg_read_io()?;
                 let key: Zeroizing<[u8; 32]> = msg_generate_random_key()?;
-                msg_encrypt(pt_msg, &key, true)?;
+                msg_encrypt(pt_msg, &key, true, base256mode)?;
             }
             (Some(src_dir), false, None, None, false) => {
                 let pt_msg: Zeroizing<String> = msg_read_file(src_dir)?;
                 let key: Zeroizing<[u8; 32]> = msg_generate_random_key()?;
-                msg_encrypt(pt_msg, &key, true)?;
+                msg_encrypt(pt_msg, &key, true, base256mode)?;
             }
             (None, true, None, None, false) => {
                 let ct_msg: Zeroizing<String> = msg_read_dec()?;
-                let key: Zeroizing<[u8; 32]> = msg_load_key()?;
-                msg_decrypt(ct_msg, &key)?;
+                let key: Zeroizing<[u8; 32]> = msg_load_key(base256mode)?;
+                msg_decrypt(ct_msg, &key, base256mode)?;
             }
             // 指定密钥模式
             (None, false, Some(key_file), None, false) => {
                 let pt_msg: Zeroizing<String> = msg_read_io()?;
                 let key: Zeroizing<[u8; 32]> = load_key(key_file,None)?;
-                msg_encrypt(pt_msg, &key, false)?;
+                msg_encrypt(pt_msg, &key, false, base256mode)?;
             }
             (Some(src_dir), false, Some(key_file), None, false) => {
                 let pt_msg: Zeroizing<String> = msg_read_file(src_dir)?;
                 let key: Zeroizing<[u8; 32]> = load_key(key_file,None)?;
-                msg_encrypt(pt_msg, &key, false)?;
+                msg_encrypt(pt_msg, &key, false, base256mode)?;
             }
             (None, true, Some(key_file), None, false) => {
                 let ct_msg: Zeroizing<String> = msg_read_dec()?;
                 let key: Zeroizing<[u8; 32]> = load_key(key_file,None)?;
-                msg_decrypt(ct_msg, &key)?;
+                msg_decrypt(ct_msg, &key, base256mode)?;
             }
             // 任意密钥模式
             (None, false, None, Some(any_file), &use_passwd) => {
                 let pt_msg: Zeroizing<String> = msg_read_io()?;
                 let need_confirm = use_passwd; // 加密时需要确认密码
                 let key: Zeroizing<[u8; 32]> = derive_key_from_any_file(any_file, use_passwd, need_confirm)?;
-                msg_encrypt(pt_msg, &key, false)?;
+                msg_encrypt(pt_msg, &key, false, base256mode)?;
             }
             (Some(src_dir), false, None, Some(any_file), &use_passwd) => {
                 let pt_msg: Zeroizing<String> = msg_read_file(src_dir)?;
                 let need_confirm = use_passwd; // 加密时需要确认密码
                 let key: Zeroizing<[u8; 32]> = derive_key_from_any_file(any_file, use_passwd, need_confirm)?;
-                msg_encrypt(pt_msg, &key, false)?;
+                msg_encrypt(pt_msg, &key, false, base256mode)?;
             }
             (None, true, None, Some(any_file), &use_passwd) => {
                 let ct_msg: Zeroizing<String> = msg_read_dec()?;
                 let need_confirm = false;
                 let key: Zeroizing<[u8; 32]> = derive_key_from_any_file(any_file, use_passwd, need_confirm)?;
-                msg_decrypt(ct_msg, &key)?;
+                msg_decrypt(ct_msg, &key, base256mode)?;
             }
             // 纯密码模式
             (None, false, None, None, true) => {
                 let pt_msg: Zeroizing<String> = msg_read_io()?;
                 let passwd: Zeroizing<String> = read_passwd_interactive()?;
                 let key: Zeroizing<[u8; 32]> = derive_key_from_password(passwd)?;
-                msg_encrypt(pt_msg, &key, false)?;
+                msg_encrypt(pt_msg, &key, false, base256mode)?;
             }
             (Some(src_dir), false, None, None, true) => {
                 let pt_msg: Zeroizing<String> = msg_read_file(src_dir)?;
                 let passwd: Zeroizing<String> = read_passwd_interactive()?;
                 let key: Zeroizing<[u8; 32]> = derive_key_from_password(passwd)?;
-                msg_encrypt(pt_msg, &key, false)?;
+                msg_encrypt(pt_msg, &key, false, base256mode)?;
             }
             (None, true, None, None, true) => {
                 let ct_msg: Zeroizing<String> = msg_read_dec()?;
                 let passwd: Zeroizing<String> = read_passwd_interactive_once()?;
                 let key: Zeroizing<[u8; 32]> = derive_key_from_password(passwd)?;
-                msg_decrypt(ct_msg, &key)?;
+                msg_decrypt(ct_msg, &key, base256mode)?;
             }
 
             _ => {
