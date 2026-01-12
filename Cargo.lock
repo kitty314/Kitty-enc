@@ -585,9 +585,10 @@ dependencies = [
 
 [[package]]
 name = "kitty_enc"
-version = "0.5.13-dev"
+version = "0.5.14-msg"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "clap",
  "ctrlc",
