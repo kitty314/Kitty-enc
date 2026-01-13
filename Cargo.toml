@@ -1,6 +1,6 @@
 [package]
 name = "kitty_enc"
-version = "0.5.16-msg"
+version = "0.5.17-msg"
 edition = "2024"
 
 [dependencies]

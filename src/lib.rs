@@ -1,6 +1,7 @@
 // 声明模块
 pub mod cli;
 pub mod cli_match;
+pub mod cli_help;
 pub mod decrypt;
 pub mod encrypt;
 pub mod fix;
@@ -17,6 +18,7 @@ pub mod base256;
 // 重新导出常用的类型和函数，方便外部使用
 pub use cli::*;
 pub use cli_match::*;
+pub use cli_help::*;
 pub use decrypt::*;
 pub use encrypt::*;
 pub use fix::*;

@@ -3,14 +3,59 @@
 
 #[derive(Debug, Clone)]
 pub struct MyBase256 {
-    start: char,
+    mode: Base256Mode
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum Base256Mode {
+    CjkIdeographA, //0x3400
     YiSyllable, //0xA000
     CjkIdeograph, //0x4E00
     MiscellaneousSymbols, //0x2600
+}
+
+
+impl MyBase256 {
+    /// Create a mapper with a fixed start at U+2600 (☀).
+    pub fn new(mode: Base256Mode) -> Self {
+        Self { mode: mode }
+    }
+
+    /// Encode bytes to a String of mapped characters.
+    pub fn encode(&self, data: &[u8]) -> String {
+        let base = self.get_base_from_mode();
+        let mut out = String::with_capacity(data.len() * 3); // most symbols are 3-byte UTF-8
+        for &b in data {
+            out.push(char::from_u32(base + b as u32).expect("validated codepoint"));
+        }
+        out
+    }
+
+    /// Decode a String of mapped characters back to bytes.
+    pub fn decode(&self, s: &str) -> Vec<u8> {
+        let base = self.get_base_from_mode();
+        let end = base + 255;
+        let mut out = Vec::with_capacity(s.chars().count());
+
+        for ch in s.chars() {
+            let cp = ch as u32;
+            if cp < base || cp > end {
+                // return Err(MapError::NonMappedChar(ch));
+                continue;
+            }
+            out.push((cp - base) as u8);
+        }
+        out
+    }
+
+    fn get_base_from_mode(&self) -> u32 {
+        match self.mode {
+            Base256Mode::CjkIdeographA => 0x3400,
+            Base256Mode::CjkIdeograph => 0x4E00,
+            Base256Mode::YiSyllable => 0xA000,
+            Base256Mode::MiscellaneousSymbols => 0x2600
+        }
+    }
 }
 
 #[cfg(any())]
@@ -32,45 +77,6 @@ impl fmt::Display for MapError {
 }
 #[cfg(any())]
 impl std::error::Error for MapError {}
-
-impl MyBase256 {
-    /// Create a mapper with a fixed start at U+2600 (☀).
-    pub fn new(mode: Base256Mode) -> Self {
-        let start_u: u32 = match mode {
-            Base256Mode::YiSyllable => 0xA000,
-            Base256Mode::CjkIdeograph => 0x4E00,
-            Base256Mode::MiscellaneousSymbols => 0x2600
-        };
-        Self { start: char::from_u32(start_u).unwrap() }
-    }
-
-    /// Encode bytes to a String of mapped characters.
-    pub fn encode(&self, data: &[u8]) -> String {
-        let base = self.start as u32;
-        let mut out = String::with_capacity(data.len() * 3); // most symbols are 3-byte UTF-8
-        for &b in data {
-            out.push(char::from_u32(base + b as u32).expect("validated codepoint"));
-        }
-        out
-    }
-
-    /// Decode a String of mapped characters back to bytes.
-    pub fn decode(&self, s: &str) -> Vec<u8> {
-        let base = self.start as u32;
-        let end = base + 255;
-        let mut out = Vec::with_capacity(s.chars().count());
-
-        for ch in s.chars() {
-            let cp = ch as u32;
-            if cp < base || cp > end {
-                // return Err(MapError::NonMappedChar(ch));
-                continue;
-            }
-            out.push((cp - base) as u8);
-        }
-        out
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -158,10 +158,11 @@ pub fn cli_match_msg(cli: &Cli) -> Result<()> {
         my_println!("您正在使用消息加密模式，该模式不适合用于高度安全的加密传输消息，除非拥有极度安全的通道用于密钥传输，否则消息的安全性几乎等于密钥传输的安全性");
         my_println!("如果对于点对点加密传输有极高的安全性需求，你应该寻找支持非对称加密，密钥交换，随机数交换等功能的软件");
         let base256mode = match base256mode_code {
-            0 => Base256Mode::YiSyllable,
+            0 => Base256Mode::CjkIdeographA,
             1 => Base256Mode::CjkIdeograph,
-            2 => Base256Mode::MiscellaneousSymbols,
-            _ => Base256Mode::YiSyllable,
+            2 => Base256Mode::YiSyllable,
+            3 => Base256Mode::MiscellaneousSymbols,
+            _ => Base256Mode::CjkIdeographA,
         };
 
         match (src_dir, dec, key_file, any_file, passwd) {

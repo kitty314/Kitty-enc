@@ -191,7 +191,7 @@ pub fn msg_decrypt(ct_msg_base64: Zeroizing<String>, master_key: &[u8; 32], mode
         // .map_err(|e| anyhow!("Base64解码失败: {}", e))?);
 
     if ct_msg.len() <= 24 {
-        return Err(anyhow!("密文长度不足"));
+        return Err(anyhow!("解密失败"));
     }
 
     // 拆分 nonce 和 ciphertext
