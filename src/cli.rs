@@ -67,11 +67,11 @@ pub enum Mode {
         key_file: Option<PathBuf>,
     },
     /// 消息模式
-    #[command(about = "消息模式", long_about = "消息加密子模式, 默认交互式输入, 默认随机生成密钥, -s 可指定消息文件，-d 指定解密模式", after_help = MSG_AFTER_HELP)]
+    #[command(aliases = ["m","message"], about = "消息模式", long_about = "消息加密子模式, 默认交互式输入, 默认随机生成密钥, -s 可指定消息文件，-d 指定解密模式", after_help = MSG_AFTER_HELP)]
     Msg {
         /// 要加密的消息文件
         #[arg(short = 's', long = "src", value_name = "FILE", help = "要加密的消息文件")]
-        src_dir: Option<PathBuf>,
+        src_file: Option<PathBuf>,
         /// 要解密的消息字符
         #[arg(short = 'd', long = "dec", help = "解密模式，交互式输入要解密的消息")]
         dec: bool,
@@ -84,8 +84,27 @@ pub enum Mode {
         /// 纯密码模式
         #[arg(short = 'p', long = "passwd", help = "使用纯密码模式，不生成密钥文件，与-a同时使用表示使用密码")]
         passwd: bool,
-        /// 编码模式
-        #[arg(short = 'm', long = "mode", value_name = "U32", help = "编码模式, 可选0, 1, 2, 3", default_value_t = 0)]
+        /// 编码字典
+        #[arg(short = 'm', long = "mode", value_name = "U32", help = "编码字典, 可选0, 1, 2, 3, 4, 5, 6", default_value_t = 0)]
+        base256mode_code: u32,
+    },
+    /// 编码模式
+    #[command(aliases = ["b","base64","base256"], about = "编码模式", long_about = "编码子模式，不是加密，不提供任何安全性", after_help = BASE_AFTER_HELP)]
+    Base {
+        /// 交互式编码模式
+        #[arg(short = 'i', long = "io-encode", help = "交互式编码模式", aliases = ["ie"])]
+        io_encode: bool,
+        /// 交互式解码模式
+        #[arg(short = 'o', long = "io-decode", help = "交互式解码模式", aliases = ["id","od"])]
+        io_decode: bool,
+        /// 要编码的文件
+        #[arg(short = 's', long = "src", value_name = "FILE", help = "要编码的文件")]
+        src_file: Option<PathBuf>,
+        /// 要解码的文件
+        #[arg(short = 'd', long = "dec", value_name = "FILE", help = "要解码的文件")]
+        dec_file: Option<PathBuf>,
+        /// 编码字典
+        #[arg(short = 'm', long = "mode", value_name = "U32", help = "编码字典, 可选0, 1, 2, 3, 4, 5, 6", default_value_t = 0)]
         base256mode_code: u32,
     },
 }
@@ -119,6 +138,7 @@ pub fn handle_cli(mut cli: Cli) -> Result<()> {
     normalize_cli_paths(&mut cli, &run_dir)?;
     let result = match &cli.mode {
         Some(Mode::Msg{..}) => {cli_match_msg(&cli)}
+        Some(Mode::Base{..}) => {cli_match_base(&cli)}
         _ => {cli_match_main(&cli, &exe_path, &run_dir)}
     };
     result
@@ -158,10 +178,14 @@ fn normalize_cli_paths(cli: &mut Cli, run_dir: &PathBuf) ->Result<()>{
             normalize_optional_path(dec_dir, run_dir)?;
             normalize_optional_path(key_file, run_dir)?;
         }
-        Some(Mode::Msg { src_dir, dec: _, key_file, any_file, passwd: _, base256mode_code: _ }) => {
-            normalize_optional_path(src_dir, run_dir)?;
+        Some(Mode::Msg { src_file,  key_file, any_file, ..}) => {
+            normalize_optional_path(src_file, run_dir)?;
             normalize_optional_path(key_file, run_dir)?;
             normalize_optional_path(any_file, run_dir)?;
+        }
+        Some(Mode::Base { src_file, dec_file, ..}) => {
+            normalize_optional_path(src_file, run_dir)?;
+            normalize_optional_path(dec_file, run_dir)?;
         }
         None => {}
     }
@@ -174,6 +198,21 @@ pub fn print_help() {
     let mut cmd = Cli::command();
     if let Err(e) = cmd.print_help() {
         my_eprintln!("Failed to print help: {}", e);
+    }
+    my_eprintln!();
+}
+
+/// 打印子命令帮助信息
+pub fn print_sub_help(name: &str) {
+    let mut cmd = Cli::command();
+    if let Some(sub) = cmd.find_subcommand_mut(name) {
+        if let Err(e) = sub.print_help() {
+            my_eprintln!("Failed to print help: {}", e);
+        }
+    } else {
+        if let Err(e) = cmd.print_help() {
+            my_eprintln!("Failed to print help: {}", e);
+        }
     }
     my_eprintln!();
 }

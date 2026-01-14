@@ -98,7 +98,7 @@ pub fn msg_generate_random_key() -> Result<Zeroizing<[u8; 32]>> {
     Ok(key)
 }
 /// 交互式读取Base64编码的密钥, 并转换为Zeroizing<[u8; 32]>
-pub fn msg_load_key(mode: Base256Mode) -> Result<Zeroizing<[u8; 32]>> {
+pub fn msg_load_key(base256mode_code: u32) -> Result<Zeroizing<[u8; 32]>> {
     // 提示用户输入
     let mut input: Zeroizing<String>;
     loop{
@@ -125,7 +125,7 @@ pub fn msg_load_key(mode: Base256Mode) -> Result<Zeroizing<[u8; 32]>> {
     }
 
     // Base64 解码
-    let decoded: Zeroizing<Vec<u8>> = Zeroizing::new(MyBase256::new(mode)
+    let decoded: Zeroizing<Vec<u8>> = Zeroizing::new(MyBase256::new(base256mode_code)
         .decode(input.trim()));
         // .map_err(|e| anyhow!("Base64解码失败: {}", e))?);
 
@@ -143,13 +143,13 @@ pub fn msg_load_key(mode: Base256Mode) -> Result<Zeroizing<[u8; 32]>> {
     Ok(key)
 }
 /// 转换为Base64字符串
-pub fn msg_base64(data: &[u8], mode: Base256Mode) -> Result<Zeroizing<String>>{
+pub fn msg_base64(data: &[u8], base256mode_code: u32) -> Result<Zeroizing<String>>{
     // 2026.1.12 已检查，encode 完整中间副本作为结果传出，计算时生成的片段没有清理
-    let encoded: Zeroizing<String> = Zeroizing::new(MyBase256::new(mode).encode(data));
+    let encoded: Zeroizing<String> = Zeroizing::new(MyBase256::new(base256mode_code).encode(data));
     Ok(encoded)
 }
 /// 加密消息
-pub fn msg_encrypt(msg: Zeroizing<String>, master_key: &[u8;32], random_key: bool, mode: Base256Mode) -> Result<i32> {
+pub fn msg_encrypt(msg: Zeroizing<String>, master_key: &[u8;32], random_key: bool, base256mode_code: u32) -> Result<i32> {
     let mut xnonce_bytes = [0u8; 24];
     if let Err(e) = OsRng.try_fill_bytes(&mut xnonce_bytes) {
         return Err(e).context("Failed to generate random nonce for message encryption");
@@ -174,19 +174,19 @@ pub fn msg_encrypt(msg: Zeroizing<String>, master_key: &[u8;32], random_key: boo
     ct_msg.extend_from_slice(&xnonce_bytes);
     ct_msg.append(ct.as_mut());
 
-    let ct_msg_base64: Zeroizing<String> = msg_base64(&ct_msg, mode)?;
+    let ct_msg_base64: Zeroizing<String> = msg_base64(&ct_msg, base256mode_code)?;
     my_println!("加密结果:\n{}\n", ct_msg_base64.as_str());
 
     if random_key {
-        let key_base64: Zeroizing<String> = msg_base64(master_key, mode)?;
+        let key_base64: Zeroizing<String> = msg_base64(master_key, base256mode_code)?;
         my_println!("随机密钥:\n{}\n", key_base64.as_str());
     }
     Ok(0)
 }
 /// 解密消息
-pub fn msg_decrypt(ct_msg_base64: Zeroizing<String>, master_key: &[u8; 32], mode: Base256Mode) -> Result<i32> {
+pub fn msg_decrypt(ct_msg_base64: Zeroizing<String>, master_key: &[u8; 32], base256mode_code: u32) -> Result<i32> {
     // Base64 解码
-    let ct_msg: Zeroizing<Vec<u8>> = Zeroizing::new(MyBase256::new(mode)
+    let ct_msg: Zeroizing<Vec<u8>> = Zeroizing::new(MyBase256::new(base256mode_code)
         .decode(ct_msg_base64.trim()));
         // .map_err(|e| anyhow!("Base64解码失败: {}", e))?);
 
