@@ -106,7 +106,7 @@ pub const MSG_AFTER_HELP: &str = {"
 使用说明：
     kitty_enc msg                   # 默认为交互式输入的加密模式，自动生成临时密钥
     kitty_enc msg -s FILE           # 从文件读取消息，自动生成临时密钥
-    kitty_enc msg -d                # 解密模式，交互式输入密文和密钥
+    kitty_enc msg -d [-e]           # 解密模式，交互式输入密文和密钥[使用编辑器]
     kitty_enc msg [-k|-a[-p]|-p]    # 指定密钥、文件或密码模式
     kitty_enc msg -m U32            # 指定使用的编码字典, 默认为0
 
@@ -130,8 +130,8 @@ pub const MSG_AFTER_HELP: &str = {"
 
 pub const BASE_AFTER_HELP: &str = {"
 使用说明：
-    kitty_enc base -i                # 交互式编码
-    kitty_enc base -o                # 交互式解码
+    kitty_enc base -i [-e]           # 交互式编码[使用编辑器]
+    kitty_enc base -o [-e]           # 交互式解码[使用编辑器]
     kitty_enc base -s FILE           # 编码指定文件
     kitty_enc base -d FILE           # 解码指定文件
     kitty_enc base -m U32            # 指定使用的编码字典, 默认为0, 解码时应相同

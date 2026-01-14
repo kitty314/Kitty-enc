@@ -87,6 +87,9 @@ pub enum Mode {
         /// 编码字典
         #[arg(short = 'm', long = "mode", value_name = "U32", help = "编码字典, 可选0, 1, 2, 3, 4, 5, 6", default_value_t = 0)]
         base256mode_code: u32,
+        /// 是否使用编辑器
+        #[arg(short = 'e', long = "editor", help = "使用编辑器, 仅在解密时可用")]
+        editor: bool,
     },
     /// 编码模式
     #[command(aliases = ["b","base64","base256"], about = "编码模式", long_about = "编码子模式，不是加密，不提供任何安全性", after_help = BASE_AFTER_HELP)]
@@ -97,6 +100,9 @@ pub enum Mode {
         /// 交互式解码模式
         #[arg(short = 'o', long = "io-decode", help = "交互式解码模式", aliases = ["id","od"])]
         io_decode: bool,
+        /// 是否使用编辑器
+        #[arg(short = 'e', long = "editor", help = "使用编辑器, 仅交互式可用")]
+        editor: bool,
         /// 要编码的文件
         #[arg(short = 's', long = "src", value_name = "FILE", help = "要编码的文件")]
         src_file: Option<PathBuf>,

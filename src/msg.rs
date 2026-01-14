@@ -64,7 +64,11 @@ pub fn msg_read_file(path: &PathBuf) -> Result<Zeroizing<String>> {
     Ok(msg)
 }
 /// 交互式获取需要解密的消息
-pub fn msg_read_dec() -> Result<Zeroizing<String>> {
+pub fn msg_read_dec(use_editor: bool) -> Result<Zeroizing<String>> {
+    if use_editor {msg_read_dec_editor()} else {msg_read_dec_io()}
+}
+/// 交互式获取需要解密的消息(io)
+pub fn msg_read_dec_io() -> Result<Zeroizing<String>> {
     my_println!("输入你要解密的消息，注意输入内容不受保护");
     my_println!("一般复制粘贴即可, 如果输错可以用Ctrl + C退出");    
     loop{
@@ -73,6 +77,34 @@ pub fn msg_read_dec() -> Result<Zeroizing<String>> {
             .allow_empty(true)
             .interact()
             .map_err(|e| anyhow::anyhow!("Failed to read message: {}", e))?);
+        // 检查中断标志
+        if crate::cli::is_interrupted() {
+            let mut msg: Zeroizing<String> = result;
+            {
+                my_println!("Cleaning up what you've typed...");
+                msg.zeroize();
+            }
+            exit(130); // 该步骤放在最开头，所以可以直接退出
+        }
+        if result.is_empty() {
+            my_println!("Message cannot be empty. Please try again.");
+            continue;
+        }
+        return Ok(result);
+    }
+}
+/// 交互式获取需要解密的消息(editor)
+pub fn msg_read_dec_editor() -> Result<Zeroizing<String>> {
+    my_println!("输入你要解密的消息，注意输入内容不受保护");
+    loop{
+        let result: Zeroizing<String> = Zeroizing::new(dialoguer::Editor::new()
+            .extension(".tmp")
+            .require_save(true)
+            .trim_newlines(true)
+            .edit("")
+            .map_err(|e| anyhow::anyhow!("Failed to read message: {}", e))?
+            .unwrap_or("".to_string())
+        );
         // 检查中断标志
         if crate::cli::is_interrupted() {
             let mut msg: Zeroizing<String> = result;

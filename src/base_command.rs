@@ -161,7 +161,7 @@ pub fn base_decode(path: &PathBuf, base256mode_code: u32) -> Result<()>{
                     .par_iter()
                     .map(|c|{
                         let s = str::from_utf8(c).with_context(||format!("转换为字符串失败"))?;
-                        encoder.try_decode(s)
+                        encoder.try_decode(s.trim())
                     }).collect();
 
 
@@ -296,7 +296,7 @@ fn split_to_str_chunks_raw(s: &[u8], chunk_size: usize) -> Vec<&[u8]> {
     chunks
 }
 
-fn base_read_io() -> Result<String> {
+fn base_read_io_editor() -> Result<String> {
     my_println!("输入你要处理的消息，注意编码不是加密，输入内容不受保护");   
     loop{
         let result= dialoguer::Editor::new()
@@ -318,16 +318,38 @@ fn base_read_io() -> Result<String> {
     }
 }
 
-pub fn base_encode_io(base256mode_code: u32) -> Result<()> {
-    let s = base_read_io()?;
+fn base_read_io() -> Result<String> {
+    my_println!("输入你要处理的消息，注意编码不是加密，输入内容不受保护");   
+    loop{
+        let result: String = dialoguer::Input::new()
+            .allow_empty(true)
+            .with_prompt("输入消息(不能为空, 不能包含换行)")
+            .interact()
+            .map_err(|e| anyhow::anyhow!("Failed to read message: {}", e))?;
+
+        // 检查中断标志
+        if crate::cli::is_interrupted() {
+            std::process::exit(130); // 没有安全性需求
+        }
+        if result.is_empty() {
+            my_println!("Message cannot be empty. Please try again.");
+            continue;
+        }
+        return Ok(result);
+    }
+}
+
+
+pub fn base_encode_io(base256mode_code: u32, use_editor: bool) -> Result<()> {
+    let s = if use_editor{ base_read_io_editor()?} else {base_read_io()?};
     let encoder = MyBase256::new(base256mode_code);
     let encoded = encoder.encode(s.as_bytes());
     my_println!("编码结果:\n{}",encoded);
     Ok(())
 }
 
-pub fn base_decode_io(base256mode_code: u32) -> Result<()> {
-    let s = base_read_io()?;
+pub fn base_decode_io(base256mode_code: u32, use_editor: bool) -> Result<()> {
+    let s = if use_editor{ base_read_io_editor()?} else {base_read_io()?};
     let encoder = MyBase256::new(base256mode_code);
     let decoded = encoder.try_decode(s.trim())?;
     let decode_s = str::from_utf8(&decoded)

@@ -6,6 +6,9 @@ pub struct MyBase256 {
     mode: Base256Mode
 }
 
+// 存在空白字符的区段
+// U+0000 ~ U+00FF, U+1680, U+2000 ~ U+20FF, U+3000
+// 禁止使用
 #[derive(Debug, Clone, Copy)]
 pub enum Base256Mode {
     ///0x3400
@@ -74,6 +77,9 @@ impl MyBase256 {
         let mut out = Vec::with_capacity(s.len());
 
         for ch in s.chars() {
+            // 尝试删除空白, 可能由用户意外加入
+            if ch.is_whitespace() {continue;}
+
             let cp = ch as u32;
             if cp < base || cp > end {
                 return Err(anyhow!("Character '{}' not in mapped range", ch));
