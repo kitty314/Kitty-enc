@@ -13,7 +13,7 @@ pub fn encrypt_file_hash(original_hash: &[u8; 32], subkey: &[u8; 32], xnonce_byt
         return Err(anyhow!("Invalid hash xnonce length: expected 24 bytes, got {} bytes", xnonce_bytes.len()));
     }
 
-    let hash_subkey: Zeroizing<[u8; 32]> = derive_subkey_simple(subkey, xnonce_bytes)?;
+    let hash_subkey: Zeroizing<[u8; 32]> = derive_hash_subkey_simple(subkey, xnonce_bytes)?;
     // 创建密码器
     let cipher = MyCipher::new(hash_subkey.as_ref())?;
     let xnonce = MyXnonce::try_from_slice(xnonce_bytes)?;
@@ -49,7 +49,7 @@ pub fn decrypt_file_hash(encrypted_hash: &[u8], subkey: &[u8; 32], xnonce_bytes:
         return Err(anyhow!("Invalid hash xnonce length: expected 24 bytes, got {} bytes", xnonce_bytes.len()));
     }
     
-    let hash_subkey: Zeroizing<[u8; 32]> = derive_subkey_simple(subkey, xnonce_bytes)?;
+    let hash_subkey: Zeroizing<[u8; 32]> = derive_hash_subkey_simple(subkey, xnonce_bytes)?;
     // 创建密码器
     let cipher = MyCipher::new(hash_subkey.as_ref())?;
     let xnonce = MyXnonce::try_from_slice(xnonce_bytes)?;

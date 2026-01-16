@@ -11,7 +11,7 @@ use ignore::DirEntry as ignore_DirEntry;
 
 use crate::*;
 
-pub fn process_decrypt_dir(dir: &Path, master_key: &[u8;32], exe_path: &Path, key_path_opt: Option<&Path>) -> Result<i32> {
+pub fn process_decrypt_dir(dir: &Path, master_key: &[u8;MASTER_KEY_LENGTH], exe_path: &Path, key_path_opt: Option<&Path>, depth: Option<usize>) -> Result<i32> {
     // 收集所有需要处理的文件
     let mut files_to_process = Vec::new();
 
@@ -32,6 +32,7 @@ pub fn process_decrypt_dir(dir: &Path, master_key: &[u8;32], exe_path: &Path, ke
     my_println!("Starting file collection...");
     
     for entry in WalkBuilder::new(dir)
+        .max_depth(depth)
         .add_custom_ignore_filename(".kitignore")
         .git_ignore(false)
         .follow_links(false)
@@ -167,7 +168,7 @@ pub fn process_decrypt_dir(dir: &Path, master_key: &[u8;32], exe_path: &Path, ke
     Ok(0)
 }
 
-fn decrypt_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
+fn decrypt_file(path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> Result<i32> {
     // 检查中断标志
     if crate::cli::is_interrupted() {
         my_println!("Interrupt signal received, skipping decryption of {}", path.display());
@@ -310,7 +311,7 @@ fn decrypt_file_verify(out_path: &Path, decrypted_stored_hash_bytes: Zeroizing<[
 }
 
 /// 流式解密大文件（使用 XChaCha20Poly1305）
-fn decrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {  
+fn decrypt_file_streaming(path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> Result<i32> {  
     // 检查中断标志
     if crate::cli::is_interrupted() {
         my_println!("Interrupt signal received, skipping decryption of {}", path.display());

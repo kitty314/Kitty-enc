@@ -15,7 +15,7 @@ use std::thread;
 
 use crate::*;
 
-pub fn process_encrypt_dir(dir: &Path, master_key: &[u8;32], key_path_opt: Option<&Path>, exe_path: &Path) -> Result<i32> {
+pub fn process_encrypt_dir(dir: &Path, master_key: &[u8;MASTER_KEY_LENGTH], key_path_opt: Option<&Path>, exe_path: &Path, depth: Option<usize>) -> Result<i32> {
     // 收集所有需要处理的文件
     let mut files_to_process = Vec::new();
     let mut skipped_empty_count = 0;
@@ -37,6 +37,7 @@ pub fn process_encrypt_dir(dir: &Path, master_key: &[u8;32], key_path_opt: Optio
     my_println!("Starting file collection...");
 
     for entry in WalkBuilder::new(dir)
+        .max_depth(depth)
         .add_custom_ignore_filename(".kitignore")
         .git_ignore(false)
         .follow_links(false)
@@ -163,7 +164,7 @@ pub fn process_encrypt_dir(dir: &Path, master_key: &[u8;32], key_path_opt: Optio
     Ok(0)
 }
 
-fn encrypt_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
+fn encrypt_file(path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> Result<i32> {
     // 检查中断标志
     if crate::cli::is_interrupted() {
         my_println!("Interrupt signal received, skipping encryption of {}", path.display());
@@ -309,7 +310,7 @@ fn encrypt_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     Ok(0)
 }
 
-fn encrypt_file_verify(out_path: &Path, master_key: &[u8;32]) -> Result<i32> {
+fn encrypt_file_verify(out_path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> Result<i32> {
     // 检查中断标志
     if crate::cli::is_interrupted() {
         my_println!("Interrupt signal received, skipping verification of {}", out_path.display());
@@ -374,7 +375,7 @@ fn encrypt_file_verify(out_path: &Path, master_key: &[u8;32]) -> Result<i32> {
 }
     
 /// 流式加密大文件（使用 XChaCha20Poly1305）
-fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
+fn encrypt_file_streaming(path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> Result<i32> {
     // 检查文件是否可访问
     if let Err(_e) = fs::OpenOptions::new().read(true).write(true).open(path) {
         my_eprintln!("Warning: File {} cannot be opened (file open exception).", path.display());
@@ -586,7 +587,7 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;32]) -> Result<i32> {
     Ok(0)
 }
 
-fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;32]) -> Result<i32> {
+fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> Result<i32> {
     // 验证加密文件
     if let Err(e) = verify_file_not_empty(&out_path) {
         return Err(e);

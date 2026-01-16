@@ -41,6 +41,7 @@ pub const ANY_FILE_MAX_READ_SIZE: usize = 1024 * 1024; // 任意文件加密时�
 pub const ENC_SUFFIX: &str = "kitty_enc";
 pub const DEFAULT_KEY_SUFFIX: &str = "kitty_key";
 pub const SALT_LENGTH: usize = 16;    // 不可更改
+pub const MASTER_KEY_LENGTH: usize = 48;
 pub const MY_ARGON2_MEMLIMIT_16: usize = 1024*1024*8;
 pub const MY_ARGON2_OPSLIMIT_16: u64 = 2;
 pub const MY_ARGON2_MEMLIMIT_32: usize = 1024*1024*16;

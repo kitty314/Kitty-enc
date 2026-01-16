@@ -124,7 +124,7 @@ fn generate_key_filename(dir: &Path) -> String {
 
 fn generate_key_file(path: &Path, passphrase_opt: Option<&Zeroizing<String>>) -> Result<()> {
     // 总是生成随机密钥
-    let mut key_bytes: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
+    let mut key_bytes: Zeroizing<[u8; MASTER_KEY_LENGTH]> = Zeroizing::new([0u8; MASTER_KEY_LENGTH]);
     if let Err(e) = OsRng.try_fill_bytes(key_bytes.as_mut()) {
         return Err(e).context("Failed to generate random key");
     }
@@ -155,7 +155,7 @@ fn generate_key_file(path: &Path, passphrase_opt: Option<&Zeroizing<String>>) ->
 }
 
 /// 准备密钥数据，根据是否使用密码短语进行相应处理
-fn prepare_key_data(key_bytes: Zeroizing<[u8; 32]>, passphrase_opt: Option<&Zeroizing<String>>) -> Result<Zeroizing<Vec<u8>>> {
+fn prepare_key_data(key_bytes: Zeroizing<[u8; MASTER_KEY_LENGTH]>, passphrase_opt: Option<&Zeroizing<String>>) -> Result<Zeroizing<Vec<u8>>> {
     match passphrase_opt {
         Some(passphrase) if !passphrase.is_empty() => {
             // 使用密码短语加密密钥
@@ -169,7 +169,7 @@ fn prepare_key_data(key_bytes: Zeroizing<[u8; 32]>, passphrase_opt: Option<&Zero
 }
 
 /// 使用密码短语加密密钥（改进版）
-fn encrypt_key_with_passphrase(key: Zeroizing<[u8; 32]>, passphrase: &str) -> Result<Zeroizing<Vec<u8>>> {
+fn encrypt_key_with_passphrase(key: Zeroizing<[u8; MASTER_KEY_LENGTH]>, passphrase: &str) -> Result<Zeroizing<Vec<u8>>> {
     // 生成随机 salt
     let mut salt_bytes = [0u8; SALT_LENGTH];
     if let Err(e) = OsRng.try_fill_bytes(&mut salt_bytes) {
@@ -207,12 +207,12 @@ fn encrypt_key_with_passphrase(key: Zeroizing<[u8; 32]>, passphrase: &str) -> Re
     Ok(output)
 }
 
-pub fn load_key(path: &Path, passphrase_opt_from_creat: Option<Zeroizing<String>>) -> Result<Zeroizing<[u8; 32]>> {
+pub fn load_key(path: &Path, passphrase_opt_from_creat: Option<Zeroizing<String>>) -> Result<Zeroizing<[u8; MASTER_KEY_LENGTH]>> {
     let mut file = File::open(path)
         .with_context(|| format!("Failed to open key file: {}", path.display()))?;
     file.try_lock_shared()
         .with_context(|| format!("Failed to lock key file: {}", path.display()))?;
-    if file.metadata()?.len() > 88 {
+    if file.metadata()?.len() > (SALT_LENGTH + 24 + MASTER_KEY_LENGTH + 16) as u64 {
         return Err(anyhow!("密钥文件大小不合理"));
     }
 
@@ -237,7 +237,7 @@ pub fn load_key(path: &Path, passphrase_opt_from_creat: Option<Zeroizing<String>
         .with_context(|| format!("Failed to unlock key file: {}", path.display()))?;
     
     // 处理密码短语
-    let result: Result<Zeroizing<[u8; 32]>> = match passphrase_opt {
+    let result: Result<Zeroizing<[u8; MASTER_KEY_LENGTH]>> = match passphrase_opt {
         Some(passphrase) if !passphrase.is_empty() => {
             // 尝试用密码短语解密密钥
             match decrypt_key_with_passphrase(bytes, passphrase) {
@@ -251,11 +251,11 @@ pub fn load_key(path: &Path, passphrase_opt_from_creat: Option<Zeroizing<String>
             }
         } 
         _ => {
-            // 没有密码短语，直接使用文件中的密钥 // 2025.12.24 不可能到这一步
-            if bytes.len() != 32 {
-                Err(anyhow!("Invalid key length: expected 32 bytes, got {}", bytes.len()))
+            // 没有密码短语，直接使用文件中的密钥
+            if bytes.len() != MASTER_KEY_LENGTH {
+                Err(anyhow!("Invalid key length: expected {} bytes, got {}", MASTER_KEY_LENGTH, bytes.len()))
             } else {
-                let mut key_bytes: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
+                let mut key_bytes: Zeroizing<[u8; MASTER_KEY_LENGTH]> = Zeroizing::new([0u8; MASTER_KEY_LENGTH]);
                 key_bytes.copy_from_slice(&bytes);
                 Ok(key_bytes)
             }
@@ -265,7 +265,7 @@ pub fn load_key(path: &Path, passphrase_opt_from_creat: Option<Zeroizing<String>
 }
 
 /// 使用密码短语解密密钥（改进版）
-fn decrypt_key_with_passphrase(encrypted_data: Zeroizing<Vec<u8>>, passphrase: Zeroizing<String>) -> Result<Zeroizing<[u8; 32]>> {
+fn decrypt_key_with_passphrase(encrypted_data: Zeroizing<Vec<u8>>, passphrase: Zeroizing<String>) -> Result<Zeroizing<[u8; MASTER_KEY_LENGTH]>> {
     if encrypted_data.len() < SALT_LENGTH + 24 {
         return Err(anyhow!("Invalid encrypted key data (too short)"));
     }
@@ -291,11 +291,11 @@ fn decrypt_key_with_passphrase(encrypted_data: Zeroizing<Vec<u8>>, passphrase: Z
         }
     };
     
-    if decrypted_key.len() != 32 {
+    if decrypted_key.len() != MASTER_KEY_LENGTH {
         return Err(anyhow!("Decrypted key has wrong length: {} bytes", decrypted_key.len()));
     }
     
-    let mut key_bytes: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
+    let mut key_bytes: Zeroizing<[u8; MASTER_KEY_LENGTH]> = Zeroizing::new([0u8; MASTER_KEY_LENGTH]);
     key_bytes.copy_from_slice(&decrypted_key);
     
     Ok(key_bytes)

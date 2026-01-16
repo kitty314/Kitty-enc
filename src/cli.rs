@@ -40,6 +40,11 @@ pub struct Cli {
     #[arg(short = 'f', long = "fix", value_name = "DIR", help = "要修复的目录路径。修复时会收集该目录下的所有文件进行比对")]
     pub fix_dir: Option<PathBuf>,
 
+    /// 递归深度
+    #[arg(short = 'r', short_alias = 'R', long = "recursive", value_name = "DEPTH", help = "要递归的深度, 默认为1, 只输入-r或指定为0表示无限递归",
+        default_value = "1",num_args = 0..=1, default_missing_value = "0")]
+    pub depth: Option<usize>,
+
     /// 操作模式子命令
     #[command(subcommand, help = "操作模式子命令")]
     pub mode: Option<Mode>,

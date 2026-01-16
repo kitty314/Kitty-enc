@@ -124,16 +124,16 @@ pub fn msg_read_dec_editor() -> Result<Zeroizing<String>> {
         return Ok(result);
     }
 }
-/// 生成随机32字节密钥
-pub fn msg_generate_random_key() -> Result<Zeroizing<[u8; 32]>> {
-    let mut key: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
+/// 生成随机 MASTER_KEY_LENGTH 字节密钥
+pub fn msg_generate_random_key() -> Result<Zeroizing<[u8; MASTER_KEY_LENGTH]>> {
+    let mut key: Zeroizing<[u8; MASTER_KEY_LENGTH]> = Zeroizing::new([0u8; MASTER_KEY_LENGTH]);
     if let Err(e) = OsRng.try_fill_bytes(key.as_mut()) {
         return Err(e).context("Failed to generate random key");
     }
     Ok(key)
 }
-/// 交互式读取Base64编码的密钥, 并转换为Zeroizing<[u8; 32]>
-pub fn msg_load_key(base256mode_code: u32) -> Result<Zeroizing<[u8; 32]>> {
+/// 交互式读取Base64编码的密钥, 并转换为Zeroizing<[u8; MASTER_KEY_LENGTH]>
+pub fn msg_load_key(base256mode_code: u32) -> Result<Zeroizing<[u8; MASTER_KEY_LENGTH]>> {
     // 提示用户输入
     let mut input: Zeroizing<String>;
     loop{
@@ -165,15 +165,15 @@ pub fn msg_load_key(base256mode_code: u32) -> Result<Zeroizing<[u8; 32]>> {
         // .map_err(|e| anyhow!("Base64解码失败: {}", e))?);
 
     // 检查长度是否为32字节
-    if decoded.len() != 32 {
+    if decoded.len() != MASTER_KEY_LENGTH {
         return Err(anyhow!(
-            "密钥长度错误: 解码后为 {} 字节, 需要 32 字节",
-            decoded.len()
+            "密钥长度错误: 解码后为 {} 字节, 需要 {} 字节",
+            decoded.len(), MASTER_KEY_LENGTH
         ));
     }
 
-    // 转换为 Zeroizing<[u8; 32]>
-    let mut key = Zeroizing::new([0u8; 32]);
+    // 转换为 Zeroizing<[u8; MASTER_KEY_LENGTH]>
+    let mut key = Zeroizing::new([0u8; MASTER_KEY_LENGTH]);
     key.copy_from_slice(&decoded);
     Ok(key)
 }
@@ -184,7 +184,7 @@ pub fn msg_base64(data: &[u8], base256mode_code: u32) -> Result<Zeroizing<String
     Ok(encoded)
 }
 /// 加密消息
-pub fn msg_encrypt(msg: Zeroizing<String>, master_key: &[u8;32], random_key: bool, base256mode_code: u32) -> Result<i32> {
+pub fn msg_encrypt(msg: Zeroizing<String>, master_key: &[u8;MASTER_KEY_LENGTH], random_key: bool, base256mode_code: u32) -> Result<i32> {
     let mut xnonce_bytes = [0u8; 24];
     if let Err(e) = OsRng.try_fill_bytes(&mut xnonce_bytes) {
         return Err(e).context("Failed to generate random nonce for message encryption");
@@ -219,7 +219,7 @@ pub fn msg_encrypt(msg: Zeroizing<String>, master_key: &[u8;32], random_key: boo
     Ok(0)
 }
 /// 解密消息
-pub fn msg_decrypt(ct_msg_base64: Zeroizing<String>, master_key: &[u8; 32], base256mode_code: u32) -> Result<i32> {
+pub fn msg_decrypt(ct_msg_base64: Zeroizing<String>, master_key: &[u8; MASTER_KEY_LENGTH], base256mode_code: u32) -> Result<i32> {
     // Base64 解码
     let ct_msg: Zeroizing<Vec<u8>> = Zeroizing::new(MyBase256::new(base256mode_code)
         .decode(ct_msg_base64.trim()));

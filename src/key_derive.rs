@@ -9,7 +9,7 @@ use crate::*;
 
 /// 简化的密钥派生函数：从主密钥和salt派生子密钥（32字节）
 /// 使用Argon2id：subkey = Argon2id(master_key, salt)
-pub fn derive_subkey_simple(master_key: &[u8; 32], salt: &[u8]) -> Result<Zeroizing<[u8;32]>> { 
+pub fn derive_subkey_simple(master_key: &[u8; MASTER_KEY_LENGTH], salt: &[u8]) -> Result<Zeroizing<[u8;32]>> { 
     // 派生密钥 - 使用 hash_password_into 直接写入可变数组
     let mut subkey: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
     if let Err(_) = my_argon2_into(master_key, salt, subkey.as_mut()) {
@@ -18,32 +18,42 @@ pub fn derive_subkey_simple(master_key: &[u8; 32], salt: &[u8]) -> Result<Zeroiz
     Ok(subkey)
 }
 
-/// 从密码派生密钥（32字节）
-/// 使用Argon2id密钥派生函数，使用密码作为salt (16字节)，如果密码太短则补0
-pub fn derive_key_from_password(password: Zeroizing<String>) -> Result<Zeroizing<[u8;32]>> {    
+/// 用于从子密钥派生哈希密钥
+pub fn derive_hash_subkey_simple(sub_key: &[u8; 32], salt: &[u8]) -> Result<Zeroizing<[u8;32]>> { 
     // 派生密钥 - 使用 hash_password_into 直接写入可变数组
-    let mut key_bytes: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
-    if let Err(_e) = my_argon2_into(password.as_ref(), password.as_ref(), key_bytes.as_mut()) {
+    let mut hash_subkey: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
+    if let Err(_) = my_argon2_into(sub_key, salt, hash_subkey.as_mut()) {
+        return Err(anyhow!("Failed to derive subkey"));
+    }
+    Ok(hash_subkey)
+}
+
+/// 从密码派生密钥（MASTER_KEY_LENGTH 字节）
+/// 使用Argon2id密钥派生函数，使用密码作为salt (16字节)，如果密码太短则补0
+pub fn derive_key_from_password(password: Zeroizing<String>) -> Result<Zeroizing<[u8;MASTER_KEY_LENGTH]>> {    
+    // 派生密钥 - 使用 hash_password_into 直接写入可变数组
+    let mut key_bytes: Zeroizing<[u8; MASTER_KEY_LENGTH]> = Zeroizing::new([0u8; MASTER_KEY_LENGTH]);
+    if let Err(_e) = my_argon2_into_master(password.as_ref(), password.as_ref(), key_bytes.as_mut()) {
         return Err(anyhow!("Failed to derive key from password"));
     }
     
     Ok(key_bytes)
 }
 
-/// 从任意文件派生密钥（32字节）
+/// 从任意文件派生密钥（MASTER_KEY_LENGTH 字节）
 /// 使用Argon2id密钥派生函数
 /// 参数：
 /// - file_path: 用于派生密钥的文件路径
 /// - use_password: 是否使用密码
 /// - need_confirm: 密码是否需要确认
 /// 流程：
-/// 1. 检查文件是否存在且大小至少32字节
+/// 1. 检查文件是否存在且大小至少 MASTER_KEY_LENGTH 字节
 /// 2. 读取文件至多前1MB内容作为输入数据
 /// 3. 如果使用密码，根据need_confirm调用相应的密码读取函数
 /// 4. 如果不使用密码，使用文件前16字节作为盐
 /// 5. 使用Argon2id派生密钥
-pub fn derive_key_from_any_file(file_path: &Path, use_password: bool, need_confirm: bool) -> Result<Zeroizing<[u8;32]>> {    
-    // 检查文件是否存在且大小至少32字节 //2025.12.18会追溯软链接 // 2026.1.1如果链接破损返回false或无权限返回err
+pub fn derive_key_from_any_file(file_path: &Path, use_password: bool, need_confirm: bool) -> Result<Zeroizing<[u8;MASTER_KEY_LENGTH]>> {    
+    // 检查文件是否存在且大小至少MASTER_KEY_LENGTH字节 //2025.12.18会追溯软链接 // 2026.1.1如果链接破损返回false或无权限返回err
     if !file_path.try_exists()? {
         return Err(anyhow!("File does not exist: {}", file_path.display()));
     }
@@ -55,8 +65,8 @@ pub fn derive_key_from_any_file(file_path: &Path, use_password: bool, need_confi
     let metadata = fs::metadata(file_path)
         .with_context(|| format!("Failed to get metadata for file: {}", file_path.display()))?;
     
-    if metadata.len() < 32 {
-        return Err(anyhow!("File must be at least 32 bytes, but is only {} bytes", metadata.len()));
+    if metadata.len() < MASTER_KEY_LENGTH as u64 {
+        return Err(anyhow!("File must be at least {} bytes, but is only {} bytes",MASTER_KEY_LENGTH, metadata.len()));
     }
 
     // 获取密码
@@ -102,14 +112,40 @@ pub fn derive_key_from_any_file(file_path: &Path, use_password: bool, need_confi
     
     
     // 派生密钥 - 使用 hash_password_into 直接写入可变数组
-    let mut key_bytes: Zeroizing<[u8; 32]> = Zeroizing::new([0u8; 32]);
-    if let Err(_e) = my_argon2_into(&file_data, salt, key_bytes.as_mut()) {
+    let mut key_bytes: Zeroizing<[u8; MASTER_KEY_LENGTH]> = Zeroizing::new([0u8; MASTER_KEY_LENGTH]);
+    if let Err(_e) = my_argon2_into_master(&file_data, salt, key_bytes.as_mut()) {
         return Err(anyhow!("Failed to derive key from any file"));
     }
        
     Ok(key_bytes)
 }
 
+/// 产生 MASTER_KEY_LENGTH 的主密钥
+pub fn my_argon2_into_master(password:&[u8], salt:&[u8], out:&mut [u8]) -> Result<()> {
+    if password.len() == 0{
+        return Err(anyhow!("派生主密钥失败, 输入密码为空"));
+    }
+    if out.len() != MASTER_KEY_LENGTH{
+        return Err(anyhow!("派生主密钥失败, 输出缓冲区长度不正确"));
+    }
+    let salt_16: Zeroizing<Vec<u8>> = argon2_input_to_16(salt)?;
+    let mut pwd_salt_pair: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::with_capacity(password.len()+salt.len()+salt_16.len()));
+    pwd_salt_pair.extend_from_slice(password);
+    pwd_salt_pair.extend_from_slice(salt);
+    pwd_salt_pair.extend_from_slice(&salt_16);
+    let key: Zeroizing<Vec<u8>> = Zeroizing::new(crypto_pwhash::pwhash(
+    MASTER_KEY_LENGTH,
+    &pwd_salt_pair,
+    &salt_16,
+    MY_ARGON2_OPSLIMIT_32,
+    MY_ARGON2_MEMLIMIT_32,
+    crypto_pwhash::ALG_DEFAULT
+)?);
+    out.copy_from_slice(&key);
+    Ok(())
+}
+
+/// 产生32字节一般密钥
 pub fn my_argon2_into(password:&[u8], salt:&[u8], out:&mut [u8]) -> Result<()> {
     if password.len() == 0{
         return Err(anyhow!("派生密钥失败, 输入密码为空"));

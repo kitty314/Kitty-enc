@@ -10,10 +10,10 @@ use rayon::prelude::*;  // 添加 rayon 并行处理
 use crate::*;
 
 /// 处理修复目录
-pub fn process_fix_dir(dir: &Path, master_key: &[u8;32], exe_path: &Path, key_path_opt: Option<&Path>) -> Result<i32> {
+pub fn process_fix_dir(dir: &Path, master_key: &[u8;MASTER_KEY_LENGTH], exe_path: &Path, key_path_opt: Option<&Path>, depth: Option<usize>) -> Result<i32> {
     my_println!("Starting file collection...");
     // 收集加密文件并查找重复的文件对
-    let (duplicate_pairs, interrupted) = collect_files_for_fix(dir, exe_path, key_path_opt)?;
+    let (duplicate_pairs, interrupted) = collect_files_for_fix(dir, exe_path, key_path_opt, depth)?;
     
     // 如果被中断，直接退出
     if interrupted {
@@ -131,7 +131,7 @@ pub fn process_fix_dir(dir: &Path, master_key: &[u8;32], exe_path: &Path, key_pa
 
 /// 收集加密文件并查找重复的文件对
 /// 返回元组：(重复文件对列表, 是否被中断)
-fn collect_files_for_fix(dir: &Path, exe_path: &Path, key_path_opt: Option<&Path>) -> Result<(Vec<(PathBuf, PathBuf)>, bool)> {
+fn collect_files_for_fix(dir: &Path, exe_path: &Path, key_path_opt: Option<&Path>, depth: Option<usize>) -> Result<(Vec<(PathBuf, PathBuf)>, bool)> {
     let mut pairs = Vec::new();
     let mut interrupted = false;
 
@@ -150,6 +150,7 @@ fn collect_files_for_fix(dir: &Path, exe_path: &Path, key_path_opt: Option<&Path
     };
 
     for entry in WalkBuilder::new(dir)
+        .max_depth(depth)
         .add_custom_ignore_filename(".kitignore")
         .git_ignore(false)
         .follow_links(false)
@@ -224,7 +225,7 @@ enum FixResult {
 }
 
 /// 验证并修复文件对
-fn verify_and_fix_pair(src_path: &Path, enc_path: &Path, master_key: &[u8;32]) -> Result<FixResult> {
+fn verify_and_fix_pair(src_path: &Path, enc_path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> Result<FixResult> {
     // 首先验证加密文件完整性
     let verify_encrypted_file_code: i32 = verify_encrypted_file(src_path,enc_path , master_key)?;
     if verify_encrypted_file_code == 1 {
@@ -281,7 +282,7 @@ fn verify_and_fix_pair(src_path: &Path, enc_path: &Path, master_key: &[u8;32]) -
 }
 
 /// 验证加密文件完整性
-fn verify_encrypted_file(src_path: &Path, enc_path: &Path, master_key: &[u8;32]) -> Result<i32> {    
+fn verify_encrypted_file(src_path: &Path, enc_path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> Result<i32> {    
     // 检查文件是否过小
     let metadata = fs::metadata(enc_path)?;
     if metadata.len() < 48 + 4 + 48 {
@@ -319,7 +320,7 @@ fn verify_encrypted_file(src_path: &Path, enc_path: &Path, master_key: &[u8;32])
 }
 
 /// 验证普通加密文件（只解密验证，不写入文件）
-fn verify_regular_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
+fn verify_regular_encrypted_file(path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> Result<i32> {
     // 检查中断标志
     if crate::cli::is_interrupted() {
         my_println!("Interrupt signal received, skipping verification of {}", path.display());
@@ -389,7 +390,7 @@ fn verify_regular_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<i3
 }
 
 /// 验证流式加密文件
-fn verify_streaming_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<i32> {
+fn verify_streaming_encrypted_file(path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> Result<i32> {
     // 检查加密文件是否可访问
     if let Err(_e) = fs::OpenOptions::new().read(true).write(true).open(path) {
         my_eprintln!("Warning: Encrypted file {} cannot be opened (file open exception).", path.display());
@@ -511,7 +512,7 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &[u8;32]) -> Result<
 }
 
 /// 验证解密文件完整性
-fn verify_decrypted_file(dec_path: &Path, enc_path: &Path, master_key: &[u8;32]) -> Result<i32> {
+fn verify_decrypted_file(dec_path: &Path, enc_path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> Result<i32> {
     // 检查中断标志
     if crate::cli::is_interrupted() {
         my_println!("Interrupt signal received, skipping verification of {}", dec_path.display());
@@ -592,7 +593,7 @@ fn verify_decrypted_file(dec_path: &Path, enc_path: &Path, master_key: &[u8;32])
     Ok(0)
 }
 
-fn get_decrypted_src_hash_bytes_from_enc_file(enc_path: &Path, master_key: &[u8;32]) -> Result<Zeroizing<[u8;32]>> {
+fn get_decrypted_src_hash_bytes_from_enc_file(enc_path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> Result<Zeroizing<[u8;32]>> {
     let mut file = File::open(enc_path)?;
     file.try_lock_shared()?;
     
