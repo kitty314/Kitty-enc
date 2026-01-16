@@ -25,11 +25,13 @@ pub struct Cli {
     pub any_file: Option<PathBuf>,
 
     /// 要加密的目录路径
-    #[arg(short = 's', long = "src", value_name = "DIR", help = "要加密的目录路径。加密时会优先在该目录中查找密钥文件")]
+    #[arg(short = 's', long = "src", value_name = "DIR", help = "要加密的目录路径。加密时会优先在该目录中查找密钥文件，默认为当前目录",
+        num_args = 0..=1, default_missing_value = ".")]
     pub src_dir: Option<PathBuf>,
 
     /// 要解密的目录路径
-    #[arg(short = 'd', long = "dec", value_name = "DIR", help = "要解密的目录路径。解密时会优先在该目录中查找密钥文件")]
+    #[arg(short = 'd', long = "dec", value_name = "DIR", help = "要解密的目录路径。解密时会优先在该目录中查找密钥文件，默认为当前目录",
+        num_args = 0..=1, default_missing_value = ".")]
     pub dec_dir: Option<PathBuf>,
 
     /// 纯密码模式
@@ -37,12 +39,13 @@ pub struct Cli {
     pub passwd: bool,
 
     /// 要修复的目录路径
-    #[arg(short = 'f', long = "fix", value_name = "DIR", help = "要修复的目录路径。修复时会收集该目录下的所有文件进行比对")]
+    #[arg(short = 'f', long = "fix", value_name = "DIR", help = "要修复的目录路径。修复时会收集该目录下的所有文件进行比对，默认为当前目录",
+        num_args = 0..=1, default_missing_value = ".")]
     pub fix_dir: Option<PathBuf>,
 
     /// 递归深度
-    #[arg(short = 'r', short_alias = 'R', long = "recursive", value_name = "DEPTH", help = "要递归的深度, 默认为1, 只输入-r或指定为0表示无限递归",
-        default_value = "1",num_args = 0..=1, default_missing_value = "0")]
+    #[arg(short = 'r', short_alias = 'R', long = "recursive", value_name = "DEPTH", help = "是否递归文件夹, 可指定递归深度, 0或默认为无限递归",
+        num_args = 0..=1, default_missing_value = "0")]
     pub depth: Option<usize>,
 
     /// 操作模式子命令
