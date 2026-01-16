@@ -208,7 +208,15 @@ fn encrypt_key_with_passphrase(key: Zeroizing<[u8; 32]>, passphrase: &str) -> Re
 }
 
 pub fn load_key(path: &Path, passphrase_opt_from_creat: Option<Zeroizing<String>>) -> Result<Zeroizing<[u8; 32]>> {
-    // 确定要使用的密码短语
+    let mut file = File::open(path)
+        .with_context(|| format!("Failed to open key file: {}", path.display()))?;
+    file.try_lock_shared()
+        .with_context(|| format!("Failed to lock key file: {}", path.display()))?;
+    if file.metadata()?.len() > 88 {
+        return Err(anyhow!("密钥文件大小不合理"));
+    }
+
+    // 确定要使用的密码短语, 先确定避免密钥长时间驻留内存
     let passphrase_opt: Option<Zeroizing<String>> = match passphrase_opt_from_creat {
         Some(passphrase) => Some(passphrase),
         None => {
@@ -223,10 +231,6 @@ pub fn load_key(path: &Path, passphrase_opt_from_creat: Option<Zeroizing<String>
     };
 
     let mut bytes: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::new());
-    let mut file = File::open(path)
-        .with_context(|| format!("Failed to open key file: {}", path.display()))?;
-    file.try_lock_shared()
-        .with_context(|| format!("Failed to lock key file: {}", path.display()))?;
     file.read_to_end(&mut bytes)
         .with_context(|| format!("Failed to read key file: {}", path.display()))?;
     file.unlock()

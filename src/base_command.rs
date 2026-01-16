@@ -308,7 +308,8 @@ fn base_read_io_editor() -> Result<String> {
             .unwrap_or("".to_string());
         // 检查中断标志
         if crate::cli::is_interrupted() {
-            std::process::exit(130); // 没有安全性需求
+            my_println!("The program may report some errors, but don't worry.");
+            return Err(anyhow!("User interrupted. Goodbye."));
         }
         if result.is_empty() {
             my_println!("Message cannot be empty. Please try again.");
@@ -329,7 +330,8 @@ fn base_read_io() -> Result<String> {
 
         // 检查中断标志
         if crate::cli::is_interrupted() {
-            std::process::exit(130); // 没有安全性需求
+            my_println!("The program may report some errors, but don't worry.");
+            return Err(anyhow!("User interrupted. Goodbye."));
         }
         if result.is_empty() {
             my_println!("Message cannot be empty. Please try again.");

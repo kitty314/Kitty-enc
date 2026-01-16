@@ -1,4 +1,4 @@
-use std::{fs::File, io::Read, path::PathBuf, process::exit};
+use std::{fs::File, io::Read, path::PathBuf};
 use rand::{TryRngCore, rngs::OsRng};
 use zeroize::{Zeroize, Zeroizing};
 use anyhow::{Context, Result, anyhow};
@@ -22,7 +22,8 @@ pub fn msg_read_io() -> Result<Zeroizing<String>> {
                 my_println!("Cleaning up what you've typed...");
                 msg.zeroize();
             }
-            exit(130); // 该步骤放在最开头，所以可以直接退出
+            my_println!("The program may report some errors, but don't worry.");
+            return Err(anyhow!("User interrupted. Goodbye."));
         }
         if result.is_empty() {
             my_println!("Message cannot be empty. Please try again.");
@@ -84,7 +85,8 @@ pub fn msg_read_dec_io() -> Result<Zeroizing<String>> {
                 my_println!("Cleaning up what you've typed...");
                 msg.zeroize();
             }
-            exit(130); // 该步骤放在最开头，所以可以直接退出
+            my_println!("The program may report some errors, but don't worry.");
+            return Err(anyhow!("User interrupted. Goodbye."));
         }
         if result.is_empty() {
             my_println!("Message cannot be empty. Please try again.");
@@ -112,7 +114,8 @@ pub fn msg_read_dec_editor() -> Result<Zeroizing<String>> {
                 my_println!("Cleaning up what you've typed...");
                 msg.zeroize();
             }
-            exit(130); // 该步骤放在最开头，所以可以直接退出
+            my_println!("The program may report some errors, but don't worry.");
+            return Err(anyhow!("User interrupted. Goodbye."));
         }
         if result.is_empty() {
             my_println!("Message cannot be empty. Please try again.");

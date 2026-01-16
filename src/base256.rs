@@ -1,5 +1,6 @@
 // src/lib.rs
 use anyhow::{anyhow, Result};
+use zeroize::Zeroize;
 
 #[derive(Debug, Clone)]
 pub struct MyBase256 {
@@ -82,6 +83,7 @@ impl MyBase256 {
 
             let cp = ch as u32;
             if cp < base || cp > end {
+                out.zeroize(); // 返回之前清零
                 return Err(anyhow!("Character '{}' not in mapped range", ch));
             }
             out.push((cp - base) as u8);
