@@ -7,6 +7,7 @@
 ### 编译环境设置(有需要的话)
 ```powershell
 $env:RUSTFLAGS="-C target-feature=+crt-static"
+$env:RUSTFLAGS="-C target-cpu=native"
 ```
 
 ### 基本用法

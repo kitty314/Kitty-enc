@@ -12,7 +12,8 @@ use crate::*;
     version,
     about = "我不是病毒",
     long_about = "我不是病毒",
-    after_help = AFTER_HELP
+    after_help = AFTER_HELP,
+    after_long_help = AFTER_LONG_HELP,
 )]
 #[command(propagate_version = true)]
 pub struct Cli {

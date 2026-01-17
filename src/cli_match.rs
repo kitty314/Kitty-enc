@@ -255,8 +255,8 @@ pub fn cli_match_base(cli: &Cli) -> Result<()> {
         my_println!("您正在使用编码模式，该模式不是加密，不提供任何安全性，不应用于任何隐私内容");
         let base256mode_code = *base256mode_code;
         match (io_encode, io_decode, editor, src_file, dec_file) {
-            // -i [-e]
-            (true, false, &use_editor, None, None) => {
+            // [-i] [-e]
+            (_, false, &use_editor, None, None) => {
                 base_encode_io(base256mode_code, use_editor)?;
             }
             // -o [-e]

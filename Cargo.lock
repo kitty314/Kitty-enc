@@ -585,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "kitty_enc"
-version = "0.6.0-r.2"
+version = "0.5.22-dev"
 dependencies = [
  "anyhow",
  "chrono",
