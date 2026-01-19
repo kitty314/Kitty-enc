@@ -266,7 +266,7 @@ pub fn load_key(path: &Path, passphrase_opt_from_creat: Option<Zeroizing<String>
 
 /// 使用密码短语解密密钥（改进版）
 fn decrypt_key_with_passphrase(encrypted_data: Zeroizing<Vec<u8>>, passphrase: Zeroizing<String>) -> Result<Zeroizing<[u8; MASTER_KEY_LENGTH]>> {
-    if encrypted_data.len() < SALT_LENGTH + 24 {
+    if encrypted_data.len() < SALT_LENGTH + 24 + MASTER_KEY_LENGTH + 16 {
         return Err(anyhow!("Invalid encrypted key data (too short)"));
     }
     

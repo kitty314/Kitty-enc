@@ -137,6 +137,7 @@ pub fn base_decode(path: &PathBuf, base256mode_code: u32) -> Result<()>{
         return Err(e).with_context(|| format!("Failed to lock file: {}", out_path.display()))
     }
     let encoder = MyBase256::new(base256mode_code);
+    let mut encode_buf: Vec<u8> = Vec::with_capacity(BASE_BUFFER_SIZE * 3 + 4);
     my_println!("开始解码: {}", path.display());
     // 流式读取、解码、写入
     let loop_result= (||-> Result<()> {
@@ -146,18 +147,17 @@ pub fn base_decode(path: &PathBuf, base256mode_code: u32) -> Result<()>{
                 return Err(anyhow!("Interrupt signal received, stopping encoding of {}", path.display()));
             }
 
-            let mut encode_buf: Vec<u8> = Vec::with_capacity(BASE_BUFFER_SIZE * 3 + 4);
             encode_buf.resize(BASE_BUFFER_SIZE * 3, 0u8);
             let bytes_read = file.read(&mut encode_buf).with_context(||format!("Failed to read file: {}", path.display()))?;
             if bytes_read == 0 {
                 break;
             }
             encode_buf.truncate(bytes_read); // 不会改变容量
-            let encode_string_raw: Vec<u8> = try_read_to_string_raw(&mut file, encode_buf)?;
+            encode_buf = try_read_to_string_raw(&mut file, encode_buf)?;
 
             // 切分成块并行处理 
             let decoded_chunks: Vec<Result<Vec<u8>, anyhow::Error>> = 
-                split_to_str_chunks_raw(&encode_string_raw, BASE_CHUNK_SIZE * 3)
+                split_to_str_chunks_raw(&encode_buf, BASE_CHUNK_SIZE * 3)
                     .par_iter()
                     .map(|c|{
                         let s = str::from_utf8(c).with_context(||format!("转换为字符串失败"))?;
@@ -252,11 +252,6 @@ fn try_read_to_string_raw(file: &mut File, mut encode_buf: Vec<u8>) -> Result<Ve
     Ok(encode_buf)
 }
 
-fn is_utf8_char_boundary(byte: u8) -> bool {
-    // This is bit magic equivalent to: b < 128 || b >= 192
-    (byte as i8) >= -0x40
-}
-
 #[cfg(any())]
 fn split_to_str_chunks(s: &str, chunk_size: usize) -> Vec<&str> {
     let mut chunks = Vec::with_capacity(BASE_BUFFER_SIZE/BASE_CHUNK_SIZE+1);
@@ -294,6 +289,11 @@ fn split_to_str_chunks_raw(s: &[u8], chunk_size: usize) -> Vec<&[u8]> {
         start = end;
     }
     chunks
+}
+
+fn is_utf8_char_boundary(byte: u8) -> bool {
+    // This is bit magic equivalent to: b < 128 || b >= 192
+    (byte as i8) >= -0x40
 }
 
 fn base_read_io_editor() -> Result<String> {
@@ -340,7 +340,6 @@ fn base_read_io() -> Result<String> {
         return Ok(result);
     }
 }
-
 
 pub fn base_encode_io(base256mode_code: u32, use_editor: bool) -> Result<()> {
     let s = if use_editor{ base_read_io_editor()?} else {base_read_io()?};

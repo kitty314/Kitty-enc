@@ -164,7 +164,7 @@ pub fn msg_load_key(base256mode_code: u32) -> Result<Zeroizing<[u8; MASTER_KEY_L
         .decode(input.trim()));
         // .map_err(|e| anyhow!("Base64解码失败: {}", e))?);
 
-    // 检查长度是否为32字节
+    // 检查长度是否为 MASTER_KEY_LENGTH 字节
     if decoded.len() != MASTER_KEY_LENGTH {
         return Err(anyhow!(
             "密钥长度错误: 解码后为 {} 字节, 需要 {} 字节",
@@ -173,7 +173,7 @@ pub fn msg_load_key(base256mode_code: u32) -> Result<Zeroizing<[u8; MASTER_KEY_L
     }
 
     // 转换为 Zeroizing<[u8; MASTER_KEY_LENGTH]>
-    let mut key = Zeroizing::new([0u8; MASTER_KEY_LENGTH]);
+    let mut key: Zeroizing<[u8; MASTER_KEY_LENGTH]> = Zeroizing::new([0u8; MASTER_KEY_LENGTH]);
     key.copy_from_slice(&decoded);
     Ok(key)
 }

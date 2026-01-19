@@ -637,6 +637,7 @@ fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;MASTER_KEY_LE
         })
     };
 
+    let mut encrypted_block: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::with_capacity(STREAMING_CHUNK_SIZE + 16));
     // 流式读取并验证每个加密块
     let loop_result = (|| -> Result<i32> {
         loop {
@@ -668,7 +669,7 @@ fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;MASTER_KEY_LE
             let block_size = block_size as usize;
             
             // 读取加密块
-            let mut encrypted_block: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; block_size]);
+            encrypted_block.resize(block_size, 0u8);
             if let Err(e) = verify_file.read_exact(&mut encrypted_block) {
                 return Err(e).with_context(|| format!("Failed to read encrypted block {} from file: {}", verify_block_counter, out_path.display()));
             }

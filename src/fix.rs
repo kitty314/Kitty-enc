@@ -420,6 +420,7 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &[u8;MASTER_KEY_LENG
     
     let mut block_counter: u64 = 0;
     let mut verify_hasher = Sha256::new(None,32)?;
+    let mut encrypted_block: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::with_capacity(STREAMING_CHUNK_SIZE + 16));
 
     // 流式读取、解密、写入（不计算哈希）
     loop {
@@ -453,7 +454,7 @@ fn verify_streaming_encrypted_file(path: &Path, master_key: &[u8;MASTER_KEY_LENG
         let block_size = block_size as usize;
         
         // 读取加密块
-        let mut encrypted_block: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; block_size]);
+        encrypted_block.resize(block_size, 0u8);
         if let Err(e) = encrypted_file.read_exact(&mut encrypted_block)
             // .with_context(|| format!("Failed to read encrypted block {} from file: {}", block_counter, path.display()))
         {

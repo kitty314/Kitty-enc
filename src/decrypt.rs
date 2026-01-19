@@ -375,6 +375,7 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> R
         return Err(e).with_context(|| format!("Failed to lock decrypted file: {}", out_path.display()))
     }
 
+    let mut encrypted_block: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::with_capacity(STREAMING_CHUNK_SIZE + 16));
     // 流式读取、解密、写入并计算哈希
     let loop_result= (||-> Result<i32> {
         loop {
@@ -402,7 +403,7 @@ fn decrypt_file_streaming(path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> R
             let block_size = block_size as usize;
             
             // 读取加密块
-            let mut encrypted_block: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; block_size]);
+            encrypted_block.resize(block_size, 0u8);
             if let Err(e) = encrypted_file.read_exact(&mut encrypted_block) {
                 return Err(e).with_context(|| format!("Failed to read encrypted block {} from file: {}", block_counter, path.display()));
             }
