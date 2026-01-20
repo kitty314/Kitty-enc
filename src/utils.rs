@@ -189,3 +189,21 @@ pub fn get_block_nonce_bytes(file_xnonce_bytes: &[u8], block_counter: u64) -> Re
     block_nonce_bytes[16..].copy_from_slice(&final_counter_bytes);
     Ok(block_nonce_bytes)
 }
+
+pub fn ask_continue_or_not() -> Result<bool> {
+    check_is_interrupted_to_err()?;
+    let c = dialoguer::Confirm::new()
+        .default(true)
+        .with_prompt("要继续吗?")
+        .interact()?;
+    check_is_interrupted_to_err()?;
+    Ok(c)
+}
+
+pub fn check_is_interrupted_to_err() -> Result<()> {
+    if crate::cli::is_interrupted() {
+        my_println!("The program may report some errors, but don't worry.");
+        return Err(anyhow!("User interrupted. Goodbye."));
+     }
+    Ok(())
+}

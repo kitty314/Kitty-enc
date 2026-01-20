@@ -112,12 +112,14 @@ pub fn read_passwd_interactive_once() -> Result<Zeroizing<String>> {
 
 /// 读取密码并正确处理 UTF-8 编码（使用 dialoguer 库）
 fn read_password_utf8(prompt:&str) -> Result<Zeroizing<String>> {
+    // 检查中断标志，前后都应该有一次, 但是一般循环速度很快，前置的检查用户来不及中断
+    check_is_interrupted_to_err()?;
     let result: Zeroizing<String> = Zeroizing::new(dialoguer::Password::new()
         .with_prompt(prompt)
         .allow_empty_password(true)
         .interact()
         .map_err(|e| anyhow::anyhow!("Failed to read password: {}", e))?);
-        // 检查中断标志
+    // 检查中断标志
     if crate::cli::is_interrupted() {
         let mut passwd: Zeroizing<String> = result;
         {

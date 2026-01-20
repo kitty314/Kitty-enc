@@ -166,55 +166,55 @@ pub fn cli_match_msg(cli: &Cli) -> Result<()> {
         match (src_file, dec, key_file, any_file, passwd, editor) {
             // 随机密钥模式
             (None, false, None, None, false, false) => {
-                let pt_msg: Zeroizing<String> = msg_read_io()?;
+                let pt_msg: Zeroizing<String> = msg_read_enc_interactive()?;
                 let key: Zeroizing<[u8; MASTER_KEY_LENGTH]> = msg_generate_random_key()?;
                 msg_encrypt(pt_msg, &key, true, base256mode_code)?;
             }
             // 随机密钥模式: -s FILE
             (Some(src_file), false, None, None, false, false) => {
-                let pt_msg: Zeroizing<String> = msg_read_file(src_file)?;
+                let pt_msg: Zeroizing<String> = msg_read_enc_from_file(src_file)?;
                 let key: Zeroizing<[u8; MASTER_KEY_LENGTH]> = msg_generate_random_key()?;
                 msg_encrypt(pt_msg, &key, true, base256mode_code)?;
             }
             // 随机密钥模式: -d [-e]
             (None, true, None, None, false, &use_editor) => {
-                let ct_msg: Zeroizing<String> = msg_read_dec(use_editor)?;
+                let ct_msg: Zeroizing<String> = msg_read_dec_interactive(use_editor)?;
                 let key: Zeroizing<[u8; MASTER_KEY_LENGTH]> = msg_load_key(base256mode_code)?;
                 msg_decrypt(ct_msg, &key, base256mode_code)?;
             }
 
             // 指定密钥模式
             (None, false, Some(key_file), None, false, false) => {
-                let pt_msg: Zeroizing<String> = msg_read_io()?;
+                let pt_msg: Zeroizing<String> = msg_read_enc_interactive()?;
                 let key: Zeroizing<[u8; MASTER_KEY_LENGTH]> = load_key(key_file,None)?;
                 msg_encrypt(pt_msg, &key, false, base256mode_code)?;
             }
             (Some(src_file), false, Some(key_file), None, false, false) => {
-                let pt_msg: Zeroizing<String> = msg_read_file(src_file)?;
+                let pt_msg: Zeroizing<String> = msg_read_enc_from_file(src_file)?;
                 let key: Zeroizing<[u8; MASTER_KEY_LENGTH]> = load_key(key_file,None)?;
                 msg_encrypt(pt_msg, &key, false, base256mode_code)?;
             }
             (None, true, Some(key_file), None, false, &use_editor) => {
-                let ct_msg: Zeroizing<String> = msg_read_dec(use_editor)?;
+                let ct_msg: Zeroizing<String> = msg_read_dec_interactive(use_editor)?;
                 let key: Zeroizing<[u8; MASTER_KEY_LENGTH]> = load_key(key_file,None)?;
                 msg_decrypt(ct_msg, &key, base256mode_code)?;
             }
 
             // 任意密钥模式
             (None, false, None, Some(any_file), &use_passwd, false) => {
-                let pt_msg: Zeroizing<String> = msg_read_io()?;
+                let pt_msg: Zeroizing<String> = msg_read_enc_interactive()?;
                 let need_confirm = use_passwd; // 加密时需要确认密码
                 let key: Zeroizing<[u8; MASTER_KEY_LENGTH]> = derive_key_from_any_file(any_file, use_passwd, need_confirm)?;
                 msg_encrypt(pt_msg, &key, false, base256mode_code)?;
             }
             (Some(src_file), false, None, Some(any_file), &use_passwd, false) => {
-                let pt_msg: Zeroizing<String> = msg_read_file(src_file)?;
+                let pt_msg: Zeroizing<String> = msg_read_enc_from_file(src_file)?;
                 let need_confirm = use_passwd; // 加密时需要确认密码
                 let key: Zeroizing<[u8; MASTER_KEY_LENGTH]> = derive_key_from_any_file(any_file, use_passwd, need_confirm)?;
                 msg_encrypt(pt_msg, &key, false, base256mode_code)?;
             }
             (None, true, None, Some(any_file), &use_passwd, &use_editor) => {
-                let ct_msg: Zeroizing<String> = msg_read_dec(use_editor)?;
+                let ct_msg: Zeroizing<String> = msg_read_dec_interactive(use_editor)?;
                 let need_confirm = false;
                 let key: Zeroizing<[u8; MASTER_KEY_LENGTH]> = derive_key_from_any_file(any_file, use_passwd, need_confirm)?;
                 msg_decrypt(ct_msg, &key, base256mode_code)?;
@@ -222,19 +222,19 @@ pub fn cli_match_msg(cli: &Cli) -> Result<()> {
 
             // 纯密码模式
             (None, false, None, None, true, false) => {
-                let pt_msg: Zeroizing<String> = msg_read_io()?;
+                let pt_msg: Zeroizing<String> = msg_read_enc_interactive()?;
                 let passwd: Zeroizing<String> = read_passwd_interactive()?;
                 let key: Zeroizing<[u8; MASTER_KEY_LENGTH]> = derive_key_from_password(passwd)?;
                 msg_encrypt(pt_msg, &key, false, base256mode_code)?;
             }
             (Some(src_file), false, None, None, true, false) => {
-                let pt_msg: Zeroizing<String> = msg_read_file(src_file)?;
+                let pt_msg: Zeroizing<String> = msg_read_enc_from_file(src_file)?;
                 let passwd: Zeroizing<String> = read_passwd_interactive()?;
                 let key: Zeroizing<[u8; MASTER_KEY_LENGTH]> = derive_key_from_password(passwd)?;
                 msg_encrypt(pt_msg, &key, false, base256mode_code)?;
             }
             (None, true, None, None, true, &use_editor) => {
-                let ct_msg: Zeroizing<String> = msg_read_dec(use_editor)?;
+                let ct_msg: Zeroizing<String> = msg_read_dec_interactive(use_editor)?;
                 let passwd: Zeroizing<String> = read_passwd_interactive_once()?;
                 let key: Zeroizing<[u8; MASTER_KEY_LENGTH]> = derive_key_from_password(passwd)?;
                 msg_decrypt(ct_msg, &key, base256mode_code)?;
@@ -257,19 +257,19 @@ pub fn cli_match_base(cli: &Cli) -> Result<()> {
         match (io_encode, io_decode, editor, src_file, dec_file) {
             // [-i] [-e]
             (_, false, &use_editor, None, None) => {
-                base_encode_io(base256mode_code, use_editor)?;
+                base_encode_interactive(base256mode_code, use_editor)?;
             }
             // -o [-e]
             (false, true, &use_editor, None, None) => {
-                base_decode_io(base256mode_code, use_editor)?;
+                base_decode_interactive(base256mode_code, use_editor)?;
             }
             // -s FILE
             (false, false, false, Some(src_file), None) => {
-                base_encode(src_file, base256mode_code)?;
+                base_encode_file(src_file, base256mode_code)?;
             }
             // -d FILE
             (false, false, false, None, Some(dec_file)) => {
-                base_decode(dec_file, base256mode_code)?;
+                base_decode_file(dec_file, base256mode_code)?;
             }
 
             _ => {

@@ -5,7 +5,7 @@ use rayon::prelude::*;
 
 use crate::*;
 
-pub fn base_encode(path: &PathBuf, base256mode_code: u32) -> Result<()> {
+pub fn base_encode_file(path: &PathBuf, base256mode_code: u32) -> Result<()> {
     // 创建输出文件路径
     let mut out_path = PathBuf::from(path);
     if let Some(orig_ext) = path.extension() {
@@ -103,7 +103,7 @@ pub fn base_encode(path: &PathBuf, base256mode_code: u32) -> Result<()> {
     Ok(())
 }
 
-pub fn base_decode(path: &PathBuf, base256mode_code: u32) -> Result<()>{
+pub fn base_decode_file(path: &PathBuf, base256mode_code: u32) -> Result<()>{
     // 检查是否以 .txt 结尾
     if let Some(orig_ext) = path.extension() {
         if orig_ext == BASE_ENCODE_FILE_SUFFIX{
@@ -296,9 +296,10 @@ fn is_utf8_char_boundary(byte: u8) -> bool {
     (byte as i8) >= -0x40
 }
 
-fn base_read_io_editor() -> Result<String> {
+fn base_read_editor() -> Result<String> {
     my_println!("输入你要处理的消息，注意编码不是加密，输入内容不受保护");   
     loop{
+        check_is_interrupted_to_err()?;
         let result= dialoguer::Editor::new()
             .extension(".tmp")
             .require_save(true)
@@ -307,32 +308,27 @@ fn base_read_io_editor() -> Result<String> {
             .map_err(|e| anyhow::anyhow!("Failed to read message: {}", e))?
             .unwrap_or("".to_string());
         // 检查中断标志
-        if crate::cli::is_interrupted() {
-            my_println!("The program may report some errors, but don't worry.");
-            return Err(anyhow!("User interrupted. Goodbye."));
-        }
+        check_is_interrupted_to_err()?;
         if result.is_empty() {
             my_println!("Message cannot be empty. Please try again.");
-            continue;
+            if ask_continue_or_not()? {continue;}
+            else {return Err(anyhow!("User interrupted. Goodbye."));}
         }
         return Ok(result);
     }
 }
 
-fn base_read_io() -> Result<String> {
+fn base_read_terminal() -> Result<String> {
     my_println!("输入你要处理的消息，注意编码不是加密，输入内容不受保护");   
     loop{
+        check_is_interrupted_to_err()?;
         let result: String = dialoguer::Input::new()
             .allow_empty(true)
             .with_prompt("输入消息(不能为空, 不能包含换行)")
             .interact()
             .map_err(|e| anyhow::anyhow!("Failed to read message: {}", e))?;
-
         // 检查中断标志
-        if crate::cli::is_interrupted() {
-            my_println!("The program may report some errors, but don't worry.");
-            return Err(anyhow!("User interrupted. Goodbye."));
-        }
+        check_is_interrupted_to_err()?;
         if result.is_empty() {
             my_println!("Message cannot be empty. Please try again.");
             continue;
@@ -341,16 +337,16 @@ fn base_read_io() -> Result<String> {
     }
 }
 
-pub fn base_encode_io(base256mode_code: u32, use_editor: bool) -> Result<()> {
-    let s = if use_editor{ base_read_io_editor()?} else {base_read_io()?};
+pub fn base_encode_interactive(base256mode_code: u32, use_editor: bool) -> Result<()> {
+    let s = if use_editor{ base_read_editor()?} else {base_read_terminal()?};
     let encoder = MyBase256::new(base256mode_code);
     let encoded = encoder.encode(s.as_bytes());
     my_println!("编码结果:\n{}",encoded);
     Ok(())
 }
 
-pub fn base_decode_io(base256mode_code: u32, use_editor: bool) -> Result<()> {
-    let s = if use_editor{ base_read_io_editor()?} else {base_read_io()?};
+pub fn base_decode_interactive(base256mode_code: u32, use_editor: bool) -> Result<()> {
+    let s = if use_editor{ base_read_editor()?} else {base_read_terminal()?};
     let encoder = MyBase256::new(base256mode_code);
     let decoded = encoder.try_decode(s.trim())?;
     let decode_s = str::from_utf8(&decoded)

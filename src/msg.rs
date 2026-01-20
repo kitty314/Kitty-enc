@@ -6,25 +6,11 @@ use anyhow::{Context, Result, anyhow};
 use crate::*;
 
 /// 交互式获取需要加密的消息
-pub fn msg_read_io() -> Result<Zeroizing<String>> {
+pub fn msg_read_enc_interactive() -> Result<Zeroizing<String>> {
     my_println!("输入你要加密的消息, 注意屏幕不会显示");
     my_println!("你只有一次机会, 如果输错请使用Ctrl + C退出");  
     loop{
-        let result: Zeroizing<String> = Zeroizing::new(dialoguer::Password::new()
-            .with_prompt("输入消息(不能为空, 不能包含换行)")
-            .allow_empty_password(true)
-            .interact()
-            .map_err(|e| anyhow::anyhow!("Failed to read message: {}", e))?);
-        // 检查中断标志
-        if crate::cli::is_interrupted() {
-            let mut msg: Zeroizing<String> = result;
-            {
-                my_println!("Cleaning up what you've typed...");
-                msg.zeroize();
-            }
-            my_println!("The program may report some errors, but don't worry.");
-            return Err(anyhow!("User interrupted. Goodbye."));
-        }
+        let result: Zeroizing<String> = msg_read_terminal_passwd("输入消息(不能为空, 不能包含换行)")?;
         if result.is_empty() {
             my_println!("Message cannot be empty. Please try again.");
             continue;
@@ -32,8 +18,9 @@ pub fn msg_read_io() -> Result<Zeroizing<String>> {
         return Ok(result);
     }
 }
+
 /// 从文件读取需要加密的消息
-pub fn msg_read_file(path: &PathBuf) -> Result<Zeroizing<String>> {
+pub fn msg_read_enc_from_file(path: &PathBuf) -> Result<Zeroizing<String>> {
     // 打开文件
     let mut file = File::open(path)
         .with_context(|| format!("Failed to open file: {}", path.display()))?;
@@ -64,66 +51,12 @@ pub fn msg_read_file(path: &PathBuf) -> Result<Zeroizing<String>> {
 
     Ok(msg)
 }
-/// 交互式获取需要解密的消息
-pub fn msg_read_dec(use_editor: bool) -> Result<Zeroizing<String>> {
-    if use_editor {msg_read_dec_editor()} else {msg_read_dec_io()}
+
+/// 获取需要解密的消息
+pub fn msg_read_dec_interactive(use_editor: bool) -> Result<Zeroizing<String>> {
+    if use_editor {msg_read_dec_editor()} else {msg_read_dec_terminal()}
 }
-/// 交互式获取需要解密的消息(io)
-pub fn msg_read_dec_io() -> Result<Zeroizing<String>> {
-    my_println!("输入你要解密的消息，注意输入内容不受保护");
-    my_println!("一般复制粘贴即可, 如果输错可以用Ctrl + C退出");    
-    loop{
-        let result: Zeroizing<String> = Zeroizing::new(dialoguer::Input::new()
-            .with_prompt("输入消息(不能为空, 不能包含换行)")
-            .allow_empty(true)
-            .interact()
-            .map_err(|e| anyhow::anyhow!("Failed to read message: {}", e))?);
-        // 检查中断标志
-        if crate::cli::is_interrupted() {
-            let mut msg: Zeroizing<String> = result;
-            {
-                my_println!("Cleaning up what you've typed...");
-                msg.zeroize();
-            }
-            my_println!("The program may report some errors, but don't worry.");
-            return Err(anyhow!("User interrupted. Goodbye."));
-        }
-        if result.is_empty() {
-            my_println!("Message cannot be empty. Please try again.");
-            continue;
-        }
-        return Ok(result);
-    }
-}
-/// 交互式获取需要解密的消息(editor)
-pub fn msg_read_dec_editor() -> Result<Zeroizing<String>> {
-    my_println!("输入你要解密的消息，注意输入内容不受保护");
-    loop{
-        let result: Zeroizing<String> = Zeroizing::new(dialoguer::Editor::new()
-            .extension(".tmp")
-            .require_save(true)
-            .trim_newlines(true)
-            .edit("")
-            .map_err(|e| anyhow::anyhow!("Failed to read message: {}", e))?
-            .unwrap_or("".to_string())
-        );
-        // 检查中断标志
-        if crate::cli::is_interrupted() {
-            let mut msg: Zeroizing<String> = result;
-            {
-                my_println!("Cleaning up what you've typed...");
-                msg.zeroize();
-            }
-            my_println!("The program may report some errors, but don't worry.");
-            return Err(anyhow!("User interrupted. Goodbye."));
-        }
-        if result.is_empty() {
-            my_println!("Message cannot be empty. Please try again.");
-            continue;
-        }
-        return Ok(result);
-    }
-}
+
 /// 生成随机 MASTER_KEY_LENGTH 字节密钥
 pub fn msg_generate_random_key() -> Result<Zeroizing<[u8; MASTER_KEY_LENGTH]>> {
     let mut key: Zeroizing<[u8; MASTER_KEY_LENGTH]> = Zeroizing::new([0u8; MASTER_KEY_LENGTH]);
@@ -132,26 +65,13 @@ pub fn msg_generate_random_key() -> Result<Zeroizing<[u8; MASTER_KEY_LENGTH]>> {
     }
     Ok(key)
 }
+
 /// 交互式读取Base64编码的密钥, 并转换为Zeroizing<[u8; MASTER_KEY_LENGTH]>
 pub fn msg_load_key(base256mode_code: u32) -> Result<Zeroizing<[u8; MASTER_KEY_LENGTH]>> {
     // 提示用户输入
     let mut input: Zeroizing<String>;
     loop{
-        input = Zeroizing::new(dialoguer::Password::new()
-            .with_prompt("请输入密钥")
-            .allow_empty_password(true)
-            .interact()
-            .map_err(|e| anyhow!("读取输入失败: {}", e))?);
-        // 检查中断标志
-        if crate::cli::is_interrupted() {
-            let mut key: Zeroizing<String> = input;
-            {
-                my_println!("Cleaning up what you've typed...");
-                key.zeroize();
-            }
-            my_println!("The program may report some errors, but don't worry.");
-            return Err(anyhow!("User interrupted. Goodbye."));
-        }
+        input = msg_read_terminal_passwd("请输入密钥")?;
         if input.is_empty() {
             my_println!("Key cannot be empty. Please try again.");
             continue;
@@ -177,12 +97,7 @@ pub fn msg_load_key(base256mode_code: u32) -> Result<Zeroizing<[u8; MASTER_KEY_L
     key.copy_from_slice(&decoded);
     Ok(key)
 }
-/// 转换为Base64字符串
-pub fn msg_base64(data: &[u8], base256mode_code: u32) -> Result<Zeroizing<String>>{
-    // 2026.1.12 已检查，encode 完整中间副本作为结果传出，计算时生成的片段没有清理
-    let encoded: Zeroizing<String> = Zeroizing::new(MyBase256::new(base256mode_code).encode(data));
-    Ok(encoded)
-}
+
 /// 加密消息
 pub fn msg_encrypt(msg: Zeroizing<String>, master_key: &[u8;MASTER_KEY_LENGTH], random_key: bool, base256mode_code: u32) -> Result<i32> {
     let mut xnonce_bytes = [0u8; 24];
@@ -209,15 +124,16 @@ pub fn msg_encrypt(msg: Zeroizing<String>, master_key: &[u8;MASTER_KEY_LENGTH], 
     ct_msg.extend_from_slice(&xnonce_bytes);
     ct_msg.append(ct.as_mut());
 
-    let ct_msg_base64: Zeroizing<String> = msg_base64(&ct_msg, base256mode_code)?;
+    let ct_msg_base64: Zeroizing<String> = Zeroizing::new(MyBase256::new(base256mode_code).encode(&ct_msg));
     my_println!("加密结果:\n{}\n", ct_msg_base64.as_str());
 
     if random_key {
-        let key_base64: Zeroizing<String> = msg_base64(master_key, base256mode_code)?;
+        let key_base64: Zeroizing<String> = Zeroizing::new(MyBase256::new(base256mode_code).encode(master_key));
         my_println!("随机密钥:\n{}\n", key_base64.as_str());
     }
     Ok(0)
 }
+
 /// 解密消息
 pub fn msg_decrypt(ct_msg_base64: Zeroizing<String>, master_key: &[u8; MASTER_KEY_LENGTH], base256mode_code: u32) -> Result<i32> {
     // Base64 解码
@@ -247,4 +163,100 @@ pub fn msg_decrypt(ct_msg_base64: Zeroizing<String>, master_key: &[u8; MASTER_KE
         .map_err(|_| anyhow!("解密结果不是有效的 UTF-8 字符串"))?;
     my_println!("解密结果:\n{}", plaintext);
     Ok(0)
+}
+
+/// 直接终端读取需要解密的消息
+fn msg_read_dec_terminal() -> Result<Zeroizing<String>> {
+    my_println!("输入你要解密的消息，注意输入内容不受保护");
+    my_println!("一般复制粘贴即可, 如果输错可以用Ctrl + C退出");    
+    loop{
+        let result: Zeroizing<String> = msg_read_terminal_normal("输入消息(不能为空, 不能包含换行)")?;
+        if result.is_empty() {
+            my_println!("Message cannot be empty. Please try again.");
+            continue;
+        }
+        return Ok(result);
+    }
+}
+
+/// 使用编辑器获取需要解密的消息
+fn msg_read_dec_editor() -> Result<Zeroizing<String>> {
+    my_println!("输入你要解密的消息，注意输入内容不受保护");
+    loop{
+        let result: Zeroizing<String> = msg_read_editor()?;
+        if result.is_empty() {
+            my_println!("Message cannot be empty. Please try again.");
+            if ask_continue_or_not()? {continue;}
+            else {return Err(anyhow!("User interrupted. Goodbye."));}
+        }
+        return Ok(result);
+    }
+}
+
+/// 直接终端读取信息(基础函数,密码模式)
+fn msg_read_terminal_passwd(prompt:&str) -> Result<Zeroizing<String>> {
+    // 检查中断标志，前后都应该有一次, 但是一般循环速度很快，前置的检查用户来不及中断
+    check_is_interrupted_to_err()?;
+    let result: Zeroizing<String> = Zeroizing::new(dialoguer::Password::new()
+        .with_prompt(prompt)
+        .allow_empty_password(true)
+        .interact()
+        .map_err(|e| anyhow::anyhow!("读取输入失败: {}", e))?);
+    // 检查中断标志
+    if crate::cli::is_interrupted() {
+        let mut passwd: Zeroizing<String> = result;
+        {
+            my_println!("Cleaning up what you've typed...");
+            passwd.zeroize();
+        }
+        my_println!("The program may report some errors, but don't worry.");
+        return Err(anyhow!("User interrupted. Goodbye."));
+    }
+    Ok(result)
+}
+
+/// 使用编辑器读取信息(基础函数)
+fn msg_read_editor() -> Result<Zeroizing<String>> {
+    check_is_interrupted_to_err()?;
+    let result: Zeroizing<String> = Zeroizing::new(dialoguer::Editor::new()
+        .extension(".tmp")
+        .require_save(true)
+        .trim_newlines(true)
+        .edit("")
+        .map_err(|e| anyhow::anyhow!("读取输入失败: {}", e))?
+        .unwrap_or("".to_string())
+    );
+    // 检查中断标志
+    if crate::cli::is_interrupted() {
+        let mut input: Zeroizing<String> = result;
+        {
+            my_println!("Cleaning up what you've typed...");
+            input.zeroize();
+        }
+        my_println!("The program may report some errors, but don't worry.");
+        return Err(anyhow!("User interrupted. Goodbye."));
+    }
+    Ok(result)
+}
+
+/// 直接终端读取信息(基础函数,普通模式)
+fn msg_read_terminal_normal(prompt:&str) -> Result<Zeroizing<String>> {
+    // 检查中断标志，前后都应该有一次, 但是一般循环速度很快，前置的检查用户来不及中断
+    check_is_interrupted_to_err()?;
+    let result: Zeroizing<String> = Zeroizing::new(dialoguer::Input::new()
+        .with_prompt(prompt)
+        .allow_empty(true)
+        .interact()
+        .map_err(|e| anyhow::anyhow!("读取输入失败: {}", e))?);
+    // 检查中断标志
+    if crate::cli::is_interrupted() {
+        let mut passwd: Zeroizing<String> = result;
+        {
+            my_println!("Cleaning up what you've typed...");
+            passwd.zeroize();
+        }
+        my_println!("The program may report some errors, but don't worry.");
+        return Err(anyhow!("User interrupted. Goodbye."));
+    }
+    Ok(result)
 }
