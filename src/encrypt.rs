@@ -231,18 +231,18 @@ fn encrypt_file(path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> Result<i32>
             .with_context(|| format!("Failed to unlock file: {}", path.display()))?;
         Ok(())
     })() {
-        stop_flag.store(true, Ordering::SeqCst);
+        stop_flag.store(true, Ordering::Release);
         return Err(e);
     };
 
     // 2025.12.25 根据chacha20poly1305 = "0.10.1"的文档，cipher在drop时实现内部清零
     let cipher = MyCipher::new(subkey.as_ref())
-        .map_err(|e|{stop_flag.store(true, Ordering::SeqCst);e})?;
+        .map_err(|e|{stop_flag.store(true, Ordering::Release);e})?;
     
     let ct: Zeroizing<Vec<u8>> = match cipher.encrypt(&file_xnonce, data.as_ref()) {
         Ok(ct) => ct,
         Err(_) => {
-            stop_flag.store(true, Ordering::SeqCst);
+            stop_flag.store(true, Ordering::Release);
             return Err(anyhow!("Encryption failed for {}", path.display()));
         }
     };
@@ -449,7 +449,7 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> R
             match hash_calculation_subthread_fn(path, stop_flag_2){
                 Ok(hash) => Ok(hash),
                 Err(e) => {
-                    subthread_err_flag_2.store(true, Ordering::SeqCst);
+                    subthread_err_flag_2.store(true, Ordering::Release);
                     // my_eprintln!("Hash_Calculation_SubThread_Err: {e}");
                     return Err(anyhow!("Hash_Calculation_SubThread_Err: {e}"));
                 }
@@ -466,7 +466,7 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> R
                 return Ok(1); // 返回成功，表示已停止处理
             }
             // 检查子线程是否出错
-            if subthread_err_flag.load(Ordering::SeqCst) {
+            if subthread_err_flag.load(Ordering::Acquire) {
                 return Ok(9);
             }
             let bytes_read = match source_file.read(&mut buffer) {
@@ -514,7 +514,7 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> R
             }
         }
         other => {
-            stop_flag.store(true, Ordering::SeqCst);
+            stop_flag.store(true, Ordering::Release);
             fs::remove_file(&out_path).ok();
             return other;
         }   
@@ -522,7 +522,7 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> R
 
     // 解锁源文件
     if let Err(e) = source_file.unlock() {
-        stop_flag.store(true, Ordering::SeqCst);
+        stop_flag.store(true, Ordering::Release);
         fs::remove_file(&out_path).ok();
         return Err(e).with_context(|| format!("Failed to unlock source file: {}", path.display()))
     }
@@ -530,7 +530,7 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> R
     // 写入结束标记：4字节0表示下一个块大小为0
     let end_marker: u32 = 0;
     if let Err(e) = out_file.write_all(&end_marker.to_le_bytes()) {
-        stop_flag.store(true, Ordering::SeqCst);
+        stop_flag.store(true, Ordering::Release);
         // 清理已创建的加密文件
         fs::remove_file(&out_path).ok();
         return Err(e).with_context(|| format!("Failed to write end marker to encrypted file: {}", out_path.display()));
@@ -618,7 +618,7 @@ fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;MASTER_KEY_LE
     let mut verify_block_counter: u64 = 0;
 
     // 哈希验证子线程   
-    let (tx, rx) = mpsc::channel::<Zeroizing<Vec<u8>>>();
+    let (tx, rx) = mpsc::sync_channel::<Zeroizing<Vec<u8>>>(16);
     let stop_flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let subthread_err_flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));  
     let hash_verify_subthread = {
@@ -630,7 +630,7 @@ fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;MASTER_KEY_LE
             match hash_verify_subthread_fn(rx_2, stop_flag_2, out_path){
                 Ok(hash) => Ok(hash),
                 Err(e) => {
-                    subthread_err_flag_2.store(true, Ordering::SeqCst);
+                    subthread_err_flag_2.store(true, Ordering::Release);
                     return Err(anyhow!("Hash_Verify_SubThread_Err: {e}"));
                 }
             }
@@ -647,7 +647,7 @@ fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;MASTER_KEY_LE
                 return Ok(1); // 返回成功，表示已停止处理
             }
             // 检查子线程是否出错
-            if subthread_err_flag.load(Ordering::SeqCst) {
+            if subthread_err_flag.load(Ordering::Acquire) {
                 return Ok(9);
             }
 
@@ -703,7 +703,7 @@ fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;MASTER_KEY_LE
             }
         }       
         other => {
-            stop_flag.store(true, Ordering::SeqCst);
+            stop_flag.store(true, Ordering::Release);
             return other;
         }   
     };
@@ -711,11 +711,11 @@ fn encrypt_file_streaming_verify(out_path: &Path, master_key: &[u8;MASTER_KEY_LE
     // 读取并验证哈希 (48字节)
     let mut stored_encrypted_hash: Zeroizing<[u8; 48]> = Zeroizing::new([0u8; 48]);
     if let Err(e) = verify_file.read_exact(stored_encrypted_hash.as_mut()) {
-        stop_flag.store(true, Ordering::SeqCst);
+        stop_flag.store(true, Ordering::Release);
         return Err(e).with_context(|| format!("Failed to read hash from encrypted file: {}", out_path.display()));
     }
     if let Err(e) = verify_file.unlock() {
-        stop_flag.store(true, Ordering::SeqCst);
+        stop_flag.store(true, Ordering::Release);
         return Err(e).with_context(|| format!("Failed to unlock encrypted file during verification: {}", out_path.display()));
     }
     let computed_hash: Zeroizing<[u8; 32]> = hash_verify_subthread.join().unwrap()?;
@@ -744,7 +744,7 @@ fn hash_calculation_subthread_fn(src_path: PathBuf, stop_flag: Arc<AtomicBool>) 
     let mut buffer: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; 65536]); // 64KB 缓冲区
     loop {
         // 检查中断标志
-        if stop_flag.load(Ordering::SeqCst) {
+        if stop_flag.load(Ordering::Acquire) {
             my_println!("Hash_Calculation_SubThread: Stop signal received, stopping hash calculation of {}", src_path.display());
             return Err(anyhow!("Stop signal received, stopping hash calculation of {}", src_path.display()));
         }
@@ -776,13 +776,13 @@ fn hash_calculation_subthread_fn(src_path: PathBuf, stop_flag: Arc<AtomicBool>) 
 fn hash_verify_subthread_fn(rx: Receiver<Zeroizing<Vec<u8>>>, stop_flag: Arc<AtomicBool>, out_path: PathBuf)-> Result<Zeroizing<[u8;32]>>{
     let mut verify_hasher = Sha256::new(None,32)?; 
     for msg in rx {
-        if stop_flag.load(Ordering::SeqCst) {
+        if stop_flag.load(Ordering::Acquire) {
             my_println!("Hash_Verify_SubThread: Stop signal received, stopping hash verification of {}", out_path.display());
             return Err(anyhow!("Stop signal received, stopping hash verification of {}", out_path.display()));
         }
         verify_hasher.update(&msg);
     }
-    if stop_flag.load(Ordering::SeqCst) {
+    if stop_flag.load(Ordering::Acquire) {
         my_println!("Hash_Verify_SubThread: Stop signal received, stopping hash verification of {}", out_path.display());
         return Err(anyhow!("Stop signal received, stopping hash verification of {}", out_path.display()));
     }

@@ -1,6 +1,6 @@
 [package]
 name = "kitty_enc"
-version = "0.5.23"
+version = "0.5.24-fix.1"
 edition = "2024"
 
 [dependencies]

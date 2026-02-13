@@ -10,8 +10,8 @@ pub struct MyBase256 {
 // 存在空白字符的区段
 // U+0000 ~ U+00FF, U+1680, U+2000 ~ U+20FF, U+3000
 // 禁止使用
-#[derive(Debug, Clone, Copy)]
-pub enum Base256Mode {
+#[derive(Debug, Clone)]
+enum Base256Mode {
     ///0x3400
     CjkIdeographA, 
     ///0x4E00

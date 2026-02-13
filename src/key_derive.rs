@@ -33,7 +33,8 @@ pub fn derive_hash_subkey_simple(sub_key: &[u8; 32], salt: &[u8]) -> Result<Zero
 pub fn derive_key_from_password(password: Zeroizing<String>) -> Result<Zeroizing<[u8;MASTER_KEY_LENGTH]>> {    
     // 派生密钥 - 使用 hash_password_into 直接写入可变数组
     let mut key_bytes: Zeroizing<[u8; MASTER_KEY_LENGTH]> = Zeroizing::new([0u8; MASTER_KEY_LENGTH]);
-    if let Err(_e) = my_argon2_into_master(password.as_ref(), password.as_ref(), key_bytes.as_mut()) {
+    let additional_data = Some("纯密码模式".as_bytes());
+    if let Err(_e) = my_argon2_into_master(password.as_ref(), password.as_ref(), additional_data,key_bytes.as_mut()) {
         return Err(anyhow!("Failed to derive key from password"));
     }
     
@@ -102,18 +103,21 @@ pub fn derive_key_from_any_file(file_path: &Path, use_password: bool, need_confi
     
     // 准备盐：如果不使用密码，使用文件前16字节作为盐；如果使用密码，使用密码作为盐
     let salt: &[u8];
+    let additional_data: Option<&[u8]>;
     if use_password {
         salt = password.as_bytes();
+        additional_data = Some("任意文件模式加密码".as_bytes());
     } else {
         // 使用文件前16字节作为盐
         let copy_len = std::cmp::min(file_data.len(), SALT_LENGTH);
         salt = &file_data[..copy_len];
+        additional_data = Some("任意文件模式".as_bytes());
     }
     
     
     // 派生密钥 - 使用 hash_password_into 直接写入可变数组
     let mut key_bytes: Zeroizing<[u8; MASTER_KEY_LENGTH]> = Zeroizing::new([0u8; MASTER_KEY_LENGTH]);
-    if let Err(_e) = my_argon2_into_master(&file_data, salt, key_bytes.as_mut()) {
+    if let Err(_e) = my_argon2_into_master(&file_data, salt, additional_data,key_bytes.as_mut()) {
         return Err(anyhow!("Failed to derive key from any file"));
     }
        
@@ -121,7 +125,7 @@ pub fn derive_key_from_any_file(file_path: &Path, use_password: bool, need_confi
 }
 
 /// 产生 MASTER_KEY_LENGTH 的主密钥
-pub fn my_argon2_into_master(password:&[u8], salt:&[u8], out:&mut [u8]) -> Result<()> {
+pub fn my_argon2_into_master(password:&[u8], salt:&[u8], additional_data: Option<&[u8]>, out:&mut [u8]) -> Result<()> {
     if password.len() == 0{
         return Err(anyhow!("派生主密钥失败, 输入密码为空"));
     }
@@ -129,10 +133,12 @@ pub fn my_argon2_into_master(password:&[u8], salt:&[u8], out:&mut [u8]) -> Resul
         return Err(anyhow!("派生主密钥失败, 输出缓冲区长度不正确"));
     }
     let salt_16: Zeroizing<Vec<u8>> = argon2_input_to_16(salt)?;
-    let mut pwd_salt_pair: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::with_capacity(password.len()+salt.len()+salt_16.len()));
+    let ad: &[u8] = additional_data.unwrap_or(&[]);
+    let mut pwd_salt_pair: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::with_capacity(password.len()+salt.len()+salt_16.len()+ad.len()));
     pwd_salt_pair.extend_from_slice(password);
     pwd_salt_pair.extend_from_slice(salt);
     pwd_salt_pair.extend_from_slice(&salt_16);
+    pwd_salt_pair.extend_from_slice(ad);
     let key: Zeroizing<Vec<u8>> = Zeroizing::new(crypto_pwhash::pwhash(
     MASTER_KEY_LENGTH,
     &pwd_salt_pair,

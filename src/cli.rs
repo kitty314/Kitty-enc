@@ -129,13 +129,13 @@ static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
 /// 检查是否被中断
 pub fn is_interrupted() -> bool {
-    INTERRUPTED.load(Ordering::SeqCst)
+    INTERRUPTED.load(Ordering::Acquire)
 }
 
 /// 设置 Ctrl+C 信号处理器
 fn set_ctrlc_handler() -> Result<()>{
     ctrlc::set_handler(move || {
-        INTERRUPTED.store(true, Ordering::SeqCst);
+        INTERRUPTED.store(true, Ordering::Release);
         my_println!("\n\nInterrupt signal received. Gracefully stopping after current operations...");
         my_println!("If you are entering your password, just press Enter to finish.")
     }).context("Failed to set Ctrl+C handler")?;
