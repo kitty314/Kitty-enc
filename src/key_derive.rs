@@ -101,16 +101,15 @@ pub fn derive_key_from_any_file(file_path: &Path, use_password: bool, need_confi
     file.unlock()
         .with_context(|| format!("Failed to unlock file: {}", file_path.display()))?;
     
-    // 准备盐：如果不使用密码，使用文件前16字节作为盐；如果使用密码，使用密码作为盐
+    // 准备盐：如果不使用密码，使用文件作为盐；如果使用密码，使用密码作为盐
     let salt: &[u8];
     let additional_data: Option<&[u8]>;
     if use_password {
         salt = password.as_bytes();
         additional_data = Some("任意文件模式加密码".as_bytes());
     } else {
-        // 使用文件前16字节作为盐
-        let copy_len = std::cmp::min(file_data.len(), SALT_LENGTH);
-        salt = &file_data[..copy_len];
+        // 使用文件作为盐
+        salt = &file_data;
         additional_data = Some("任意文件模式".as_bytes());
     }
     
