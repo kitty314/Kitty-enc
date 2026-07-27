@@ -141,7 +141,7 @@ impl State {
             libsodium_sys::crypto_hash_sha256_update(
                 &mut self.state,
                 input.as_ptr(),
-                input.len() as libc::c_ulonglong,
+                input.len() as u64,
             );
         }
     }

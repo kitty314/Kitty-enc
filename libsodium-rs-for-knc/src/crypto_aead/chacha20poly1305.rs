@@ -1,9 +1,11 @@
-//! # ChaCha20-Poly1305-IETF Authenticated Encryption with Associated Data
+//! # ChaCha20-Poly1305 Authenticated Encryption with Associated Data
 //!
-//! This module provides authenticated encryption and decryption using the
-//! ChaCha20-Poly1305-IETF algorithm. This is a widely used AEAD cipher that combines
-//! the ChaCha20 stream cipher with the Poly1305 message authentication code.
-//! It is standardized in RFC 8439 (formerly RFC 7539).
+//! This module provides authenticated encryption and decryption using libsodium's original
+//! ChaCha20-Poly1305 AEAD construction. This variant combines the ChaCha20 stream
+//! cipher with the Poly1305 message authentication code and uses a 64-bit nonce.
+//!
+//! For the RFC 8439 / IETF variant with a 96-bit nonce, use
+//! [`crate::crypto_aead::chacha20poly1305_ietf`].
 //!
 //! ## Algorithm Details
 //!
@@ -11,7 +13,7 @@
 //!
 //! 1. **ChaCha20**: A stream cipher designed by Daniel J. Bernstein
 //!    * Uses a 256-bit key for encryption
-//!    * Uses a 96-bit nonce (12 bytes) in the IETF variant
+//!    * Uses a 64-bit nonce (8 bytes) in libsodium's original variant
 //!    * Based on the ARX (Add-Rotate-XOR) design principle
 //!    * Operates on 512-bit blocks using a 20-round function
 //!
@@ -22,7 +24,7 @@
 //!
 //! ## Features and Advantages
 //!
-//! - **Standardization**: Formally standardized in RFC 8439, providing interoperability
+//! - **Compatibility**: Matches libsodium's original ChaCha20-Poly1305 API
 //! - **High performance**: Optimized for software implementations without requiring specialized hardware
 //! - **Cross-platform efficiency**: Works efficiently on all platforms, from embedded devices to servers
 //! - **Timing attack resistance**: The algorithm is designed to be constant-time, protecting against timing side-channels
@@ -38,23 +40,22 @@
 //!
 //! ## Nonce Considerations
 //!
-//! ChaCha20-Poly1305-IETF uses a 96-bit (12-byte) nonce, which is **NOT** large enough for safe
-//! random generation. With a 96-bit nonce, the probability of a collision becomes significant
-//! after encrypting approximately 2^32 messages with the same key.
+//! This variant uses a 64-bit (8-byte) nonce, which is too small for random generation and
+//! requires strict nonce management. Prefer a counter or another deterministic scheme, or use
+//! `chacha20poly1305_ietf` / `xchacha20poly1305` if you need wider nonce spaces.
 //!
 //! For safe nonce handling, use one of these approaches:
 //!
-//! 1. **Counter-based nonces**: Maintain a strictly increasing counter for each encryption
-//!    with the same key. This is the recommended approach for ChaCha20-Poly1305.
+//! 1. **Counter-based nonces**: Maintain a strictly increasing 64-bit counter for each encryption
+//!    with the same key. This is the recommended approach for this variant.
 //!
-//! 2. **Use XChaCha20-Poly1305 instead**: If you need to encrypt many messages with the same key
-//!    and cannot reliably maintain a counter, use XChaCha20-Poly1305 which has a 192-bit nonce
-//!    that is safe for random generation.
+//! 2. **Use a wider-nonce variant instead**: If you need RFC 8439 interoperability, use
+//!    `chacha20poly1305_ietf`. If you need random nonces, prefer `xchacha20poly1305`.
 //!
 //! ## Security Considerations and Best Practices
 //!
 //! - **Nonce management**: Never reuse a nonce with the same key. Use a counter-based approach
-//!   for generating nonces with ChaCha20-Poly1305.
+//!   for generating nonces with this original ChaCha20-Poly1305 variant.
 //!
 //! - **Key management**: Protect your secret keys. Consider using key derivation functions (KDFs)
 //!   to derive encryption keys from passwords or master keys.
@@ -73,10 +74,10 @@
 //!
 //! ## When to Use ChaCha20-Poly1305
 //!
-//! - When you need a standardized AEAD algorithm (RFC 8439)
-//! - When you need interoperability with other systems
-//! - When you can reliably maintain a counter for nonce generation
-//! - When you need an algorithm that works efficiently on all platforms without hardware acceleration
+//! - When you need compatibility with libsodium's original ChaCha20-Poly1305 API
+//! - When both sides already use the 64-bit-nonce construction
+//! - When you can reliably maintain a 64-bit counter for nonce generation
+//! - When RFC 8439 interoperability is not required
 //!
 //! ## Example
 //!

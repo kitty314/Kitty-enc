@@ -122,8 +122,12 @@ pub const ALG_ARGON2I13: i32 = libsodium_sys::crypto_pwhash_ALG_ARGON2I13 as i32
 
 /// Minimum output bytes for the derived key
 pub const BYTES_MIN: usize = libsodium_sys::crypto_pwhash_BYTES_MIN as usize;
-/// Maximum output bytes for the derived key (hardcoded value from libsodium)
-pub const BYTES_MAX: usize = 0x001f_ffff_ffe0; // Value from libsodium
+/// Maximum output bytes for the derived key
+pub const BYTES_MAX: usize = if usize::BITS >= 32 {
+    u32::MAX as usize
+} else {
+    usize::MAX
+};
 /// Minimum password length in bytes
 pub const PASSWD_MIN: usize = libsodium_sys::crypto_pwhash_PASSWD_MIN as usize;
 /// Maximum password length in bytes
@@ -139,8 +143,14 @@ pub const OPSLIMIT_MIN: u64 = libsodium_sys::crypto_pwhash_OPSLIMIT_MIN as u64;
 pub const OPSLIMIT_MAX: u64 = libsodium_sys::crypto_pwhash_OPSLIMIT_MAX as u64;
 /// Minimum memory limit parameter in bytes
 pub const MEMLIMIT_MIN: usize = libsodium_sys::crypto_pwhash_MEMLIMIT_MIN as usize;
-/// Maximum memory limit parameter in bytes (hardcoded value from libsodium)
-pub const MEMLIMIT_MAX: usize = 4_398_046_510_080; // Value from libsodium
+/// Maximum memory limit parameter in bytes
+pub const MEMLIMIT_MAX: usize = if usize::BITS >= 64 {
+    4_398_046_510_080
+} else if usize::BITS >= 32 {
+    2_147_483_648
+} else {
+    32_768
+};
 
 /// Operations limit for interactive use (e.g., web login)
 pub const OPSLIMIT_INTERACTIVE: u64 = libsodium_sys::crypto_pwhash_OPSLIMIT_INTERACTIVE as u64;
@@ -290,11 +300,11 @@ pub fn pwhash(
     let result = unsafe {
         libsodium_sys::crypto_pwhash(
             output.as_mut_ptr(),
-            out_len as libc::c_ulonglong,
-            password.as_ptr() as *const libc::c_char,
-            password.len() as libc::c_ulonglong,
+            out_len as u64,
+            password.as_ptr() as *const std::os::raw::c_char,
+            password.len() as u64,
             salt.as_ptr(),
-            opslimit as libc::c_ulonglong,
+            opslimit,
             memlimit as libc::size_t,
             alg,
         )
@@ -405,10 +415,10 @@ pub fn pwhash_str(password: &[u8], opslimit: u64, memlimit: usize) -> Result<Str
     let mut output = vec![0u8; STRBYTES];
     let result = unsafe {
         libsodium_sys::crypto_pwhash_str(
-            output.as_mut_ptr() as *mut libc::c_char,
-            password.as_ptr() as *const libc::c_char,
-            password.len() as libc::c_ulonglong,
-            opslimit as libc::c_ulonglong,
+            output.as_mut_ptr() as *mut std::os::raw::c_char,
+            password.as_ptr() as *const std::os::raw::c_char,
+            password.len() as u64,
+            opslimit,
             memlimit as libc::size_t,
         )
     };
@@ -535,8 +545,8 @@ pub fn pwhash_str_verify(hash_str: &str, password: &[u8]) -> Result<bool> {
     let result = unsafe {
         libsodium_sys::crypto_pwhash_str_verify(
             c_hash.as_ptr(),
-            password.as_ptr() as *const libc::c_char,
-            password.len() as libc::c_ulonglong,
+            password.as_ptr() as *const std::os::raw::c_char,
+            password.len() as u64,
         )
     };
 
@@ -656,8 +666,8 @@ pub fn pwhash_str_verify(hash_str: &str, password: &[u8]) -> Result<bool> {
 pub fn pwhash_str_needs_rehash(hash_str: &str, opslimit: u64, memlimit: usize) -> Result<bool> {
     let result = unsafe {
         libsodium_sys::crypto_pwhash_str_needs_rehash(
-            hash_str.as_ptr() as *const libc::c_char,
-            opslimit as libc::c_ulonglong,
+            hash_str.as_ptr() as *const std::os::raw::c_char,
+            opslimit,
             memlimit as libc::size_t,
         )
     };
@@ -681,6 +691,19 @@ pub mod scryptsalsa208sha256;
 mod tests {
     use super::*;
     use crate::random;
+
+    #[test]
+    fn test_max_constants_match_libsodium() {
+        assert_eq!(BYTES_MAX, unsafe {
+            libsodium_sys::crypto_pwhash_bytes_max()
+        });
+        assert_eq!(PASSWD_MAX, unsafe {
+            libsodium_sys::crypto_pwhash_passwd_max()
+        });
+        assert_eq!(MEMLIMIT_MAX, unsafe {
+            libsodium_sys::crypto_pwhash_memlimit_max()
+        });
+    }
 
     #[test]
     fn test_pwhash() {

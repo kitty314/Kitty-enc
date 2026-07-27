@@ -21,14 +21,14 @@
 //! println!("Is minimal implementation: {}", is_minimal);
 //! ```
 
-/// The version string of the libsodium library (e.g., "1.0.20")
-pub const VERSION_STRING: &str = "1.0.20";
+/// The version string of the libsodium library (e.g., "1.0.21")
+pub const VERSION_STRING: &str = "1.0.21";
 
 /// The major version number of the libsodium library
-pub const LIBRARY_VERSION_MAJOR: i32 = 26;
+pub const LIBRARY_VERSION_MAJOR: i32 = 28;
 
 /// The minor version number of the libsodium library
-pub const LIBRARY_VERSION_MINOR: i32 = 2;
+pub const LIBRARY_VERSION_MINOR: i32 = 0;
 
 /// Returns the version string of the libsodium library
 ///

@@ -39,6 +39,7 @@
 //! - **[`crypto_hash`]**: Traditional cryptographic hash functions (SHA-256, SHA-512)
 //! - **[`crypto_ipcrypt`]**: IP address encryption for privacy-preserving storage
 //! - **[`crypto_kdf`]**: Key derivation functions
+//! - **[`crypto_kem`]**: Key encapsulation mechanisms
 //! - **[`crypto_kx`]**: Key exchange
 //! - **[`crypto_pwhash`]**: Password hashing and key derivation
 //! - **[`crypto_scalarmult`]**: Elliptic curve operations
@@ -55,7 +56,7 @@
 use thiserror::Error;
 
 /// Error type for libsodium operations
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum SodiumError {
     /// Hex decoding failed
     #[error("Invalid hexadecimal string")]
@@ -63,6 +64,9 @@ pub enum SodiumError {
     /// Base64 decoding failed
     #[error("Invalid Base64 string")]
     Base64DecodingFailed,
+    /// Padding could not be added or removed (invalid padding or block size)
+    #[error("Invalid padding")]
+    InvalidPadding,
     /// Initialization of libsodium failed
     #[error("libsodium initialization failed")]
     InitializationError,
@@ -121,6 +125,7 @@ pub mod crypto_generichash;
 pub mod crypto_hash;
 pub mod crypto_ipcrypt;
 pub mod crypto_kdf;
+pub mod crypto_kem;
 pub mod crypto_kx;
 pub mod crypto_onetimeauth;
 pub mod crypto_pwhash;
@@ -139,7 +144,7 @@ pub mod version;
 // No re-exports at the top level - users should import from specific modules
 
 // Initialize libsodium when the library is loaded
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn initialize() {
     if let Err(e) = ensure_init() {
         panic!("Failed to initialize libsodium: {e}");
