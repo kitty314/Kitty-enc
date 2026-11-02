@@ -1,21 +1,21 @@
 [package]
 name = "kitty_enc"
-version = "0.5.24-dev.2"
+version = "0.5.25-dev.1"
 edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
-clap = { version = "4.5.53", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive"] }
 walkdir = "2.5.0"
-rand = "0.9.5" # 似乎可信任
-chrono = "0.4.42"
-zeroize = { version = "1.9.0", features = ["derive"] }
+rand = "0.10.3" # 似乎可信任
+chrono = "0.4.45"
+zeroize = { version = "1.9.1", features = ["derive"] }
 dialoguer = { version = "0.12", features = ["password"] } # 2025.12.29 已审查
 rayon = "1.12.0"  # 添加 rayon 用于并行处理
-ignore = "0.4.25"
+ignore = "0.4.34"
 ctrlc = "3.5.1"
 lazy_static = "1.5.0"
-libsodium-rs = { version = "0.2.4", features = ["optimized", "fetch-latest", "minimal"] }
+libsodium-rs = { version = "0.3.0", features = ["optimized", "fetch-latest"] }
 
 # argon2 = { version = "0.5.3", features = ["zeroize"] } # 依赖不可信任
 # chacha20poly1305 = "0.10.1" # 主体可信任，依赖未审察

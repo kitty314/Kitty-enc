@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
-use rand::rngs::OsRng;
-use rand::TryRngCore;
+use rand::rngs::SysRng;
+use rand::TryRng;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -125,7 +125,7 @@ fn generate_key_filename(dir: &Path) -> String {
 fn generate_key_file(path: &Path, passphrase_opt: Option<&Zeroizing<String>>) -> Result<()> {
     // 总是生成随机密钥
     let mut key_bytes: Zeroizing<[u8; MASTER_KEY_LENGTH]> = Zeroizing::new([0u8; MASTER_KEY_LENGTH]);
-    if let Err(e) = OsRng.try_fill_bytes(key_bytes.as_mut()) {
+    if let Err(e) = SysRng.try_fill_bytes(key_bytes.as_mut()) {
         return Err(e).context("Failed to generate random key");
     }
     
@@ -172,7 +172,7 @@ fn prepare_key_data(key_bytes: Zeroizing<[u8; MASTER_KEY_LENGTH]>, passphrase_op
 fn encrypt_key_with_passphrase(key: Zeroizing<[u8; MASTER_KEY_LENGTH]>, passphrase: &str) -> Result<Zeroizing<Vec<u8>>> {
     // 生成随机 salt
     let mut salt_bytes = [0u8; SALT_LENGTH];
-    if let Err(e) = OsRng.try_fill_bytes(&mut salt_bytes) {
+    if let Err(e) = SysRng.try_fill_bytes(&mut salt_bytes) {
         return Err(e).context("Failed to generate random salt for key encryption");
     }
     // 派生密钥 - 使用 hash_password_into 直接写入可变数组
@@ -185,7 +185,7 @@ fn encrypt_key_with_passphrase(key: Zeroizing<[u8; MASTER_KEY_LENGTH]>, passphra
     
     // 随机 xnonce
     let mut xnonce_bytes = [0u8; 24];
-    if let Err(e) = OsRng.try_fill_bytes(&mut xnonce_bytes) {
+    if let Err(e) = SysRng.try_fill_bytes(&mut xnonce_bytes) {
         return Err(e).context("Failed to generate random nonce for key encryption");
     }
     let xnonce = MyXnonce::try_from_slice(&xnonce_bytes)?;

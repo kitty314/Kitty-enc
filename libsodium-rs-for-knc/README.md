@@ -46,10 +46,22 @@ Add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-libsodium-rs = "0.2"
+libsodium-rs = "0"
 ```
 
-This crate requires libsodium to be installed on your system. Installation instructions for various platforms:
+libsodium is built automatically from the bundled source.
+You do not need to install it separately.
+
+To use a compatible system copy, build with:
+
+```sh
+SODIUM_USE_PKG_CONFIG=1 cargo build
+```
+
+Or set `SODIUM_LIB_DIR` to the directory containing the library.
+Installing a system package alone does not select it.
+
+The installation instructions below are optional.
 
 ### Linux
 
@@ -76,6 +88,24 @@ Install libsodium using [vcpkg](https://github.com/microsoft/vcpkg):
 
 ```bash
 vcpkg install libsodium:x64-windows-static
+```
+
+### Cargo Features
+
+None of these are on by default.
+
+- `fetch-latest`: download the latest stable libsodium release when building, instead of using the copy that ships with `libsodium-sys-stable`.
+- `optimized`: tune libsodium for the CPU you're building on.
+  It's usually faster, but the binary may not run on other machines.
+- `wasmer`: on WASI targets, use the WebAssembly wide-arithmetic extension.
+  On Wasmer, Poly1305 gets about 3 times faster, and Ed25519 and X25519 up to 4 times faster.
+  Wasmer and Wasmtime support it out of the box, but other runtimes won't be able to load the module.
+
+For example:
+
+```toml
+[dependencies]
+libsodium-rs = { version = "0", features = ["optimized"] }
 ```
 
 ## Usage Examples
@@ -129,18 +159,15 @@ use libsodium_rs::{self, ensure_init};
 use libsodium_rs::crypto_box;
 
 fn main() {
-    // Initialize libsodium
     ensure_init().expect("Failed to initialize libsodium");
 
-    // Generate key pairs for Alice and Bob
-    let alice_keypair = crypto_box::KeyPair::generate().unwrap();
+    let alice_keypair = crypto_box::KeyPair::generate();
     let alice_pk = alice_keypair.public_key;
     let alice_sk = alice_keypair.secret_key;
-    let bob_keypair = crypto_box::KeyPair::generate().unwrap();
+    let bob_keypair = crypto_box::KeyPair::generate();
     let bob_pk = bob_keypair.public_key;
     let bob_sk = bob_keypair.secret_key;
 
-    // Generate a random nonce
     let nonce = crypto_box::Nonce::generate();
 
     // Alice encrypts a message for Bob
@@ -198,26 +225,20 @@ use sodium::ensure_init;
 use sodium::crypto_generichash::blake2b;
 
 fn main() {
-    // Initialize libsodium
     ensure_init().expect("Failed to initialize libsodium");
 
-    // Generate key pairs for Alice and Bob
-    let alice_secret = curve25519::scalar_random().unwrap();
+    let alice_secret = sodium::random::bytes(curve25519::SCALARBYTES);
     let alice_public = curve25519::scalarmult_base(&alice_secret).unwrap();
 
-    let bob_secret = curve25519::scalar_random().unwrap();
+    let bob_secret = sodium::random::bytes(curve25519::SCALARBYTES);
     let bob_public = curve25519::scalarmult_base(&bob_secret).unwrap();
 
-    // Alice computes shared secret
     let alice_shared = curve25519::scalarmult(&alice_secret, &bob_public).unwrap();
-
-    // Bob computes shared secret
     let bob_shared = curve25519::scalarmult(&bob_secret, &alice_public).unwrap();
 
-    // IMPORTANT: Always hash the shared secret before using it as a key
-    // Use a cryptographically secure hash function like BLAKE2b
-    let alice_key = blake2b::hash(32, &alice_shared, None, None).unwrap();
-    let bob_key = blake2b::hash(32, &bob_shared, None, None).unwrap();
+    // Hash the shared secret before using it as a key.
+    let alice_key = blake2b::hash(&alice_shared, 32).unwrap();
+    let bob_key = blake2b::hash(&bob_shared, 32).unwrap();
 
     assert_eq!(alice_key, bob_key);
 }

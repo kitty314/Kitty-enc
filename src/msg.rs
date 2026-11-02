@@ -1,5 +1,5 @@
 use std::{fs::File, io::Read, path::PathBuf};
-use rand::{TryRngCore, rngs::OsRng};
+use rand::{TryRng, rngs::SysRng};
 use zeroize::{Zeroize, Zeroizing};
 use anyhow::{Context, Result, anyhow};
 
@@ -60,7 +60,7 @@ pub fn msg_read_dec_interactive(use_editor: bool) -> Result<Zeroizing<String>> {
 /// 生成随机 MASTER_KEY_LENGTH 字节密钥
 pub fn msg_generate_random_key() -> Result<Zeroizing<[u8; MASTER_KEY_LENGTH]>> {
     let mut key: Zeroizing<[u8; MASTER_KEY_LENGTH]> = Zeroizing::new([0u8; MASTER_KEY_LENGTH]);
-    if let Err(e) = OsRng.try_fill_bytes(key.as_mut()) {
+    if let Err(e) = SysRng.try_fill_bytes(key.as_mut()) {
         return Err(e).context("Failed to generate random key");
     }
     Ok(key)
@@ -101,7 +101,7 @@ pub fn msg_load_key(base256mode_code: u32) -> Result<Zeroizing<[u8; MASTER_KEY_L
 /// 加密消息
 pub fn msg_encrypt(msg: Zeroizing<String>, master_key: &[u8;MASTER_KEY_LENGTH], random_key: bool, base256mode_code: u32) -> Result<i32> {
     let mut xnonce_bytes = [0u8; 24];
-    if let Err(e) = OsRng.try_fill_bytes(&mut xnonce_bytes) {
+    if let Err(e) = SysRng.try_fill_bytes(&mut xnonce_bytes) {
         return Err(e).context("Failed to generate random nonce for message encryption");
     }
     let xnonce = MyXnonce::try_from_slice(&xnonce_bytes)?;

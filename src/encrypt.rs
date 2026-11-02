@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow};
-use rand::rngs::OsRng;
-use rand::TryRngCore;
+use rand::rngs::SysRng;
+use rand::TryRng;
 use std::fs::{self, File};
 use std::io::{Write, Read};
 use std::path::{Path, PathBuf};
@@ -196,7 +196,7 @@ fn encrypt_file(path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> Result<i32>
 
     // Random XNonce per file (48 bytes)
     let mut all_xnonce_bytes = [0u8; 48];
-    if let Err(e) = OsRng.try_fill_bytes(&mut all_xnonce_bytes) {
+    if let Err(e) = SysRng.try_fill_bytes(&mut all_xnonce_bytes) {
         return Err(e).context("Failed to generate random nonce for file encryption");
     }
     let (file_xnonce_bytes, hash_xnonce_bytes) = all_xnonce_bytes.split_at(24);
@@ -406,7 +406,7 @@ fn encrypt_file_streaming(path: &Path, master_key: &[u8;MASTER_KEY_LENGTH]) -> R
 
     // 生成 48 字节的扩展 nonce
     let mut all_xnonce_bytes = [0u8; 48];
-    if let Err(e) = OsRng.try_fill_bytes(&mut all_xnonce_bytes) {
+    if let Err(e) = SysRng.try_fill_bytes(&mut all_xnonce_bytes) {
         return Err(e).context("Failed to generate random nonce for streaming encryption");
     }
     // 拆分nonce
